@@ -1,0 +1,752 @@
+<goal>
+ This is the codebase you gave me, its very incomplete and lazy and is not working.
+</goal>
+
+<output_requirements>
+- Don't be lazy, provide thorough, high-quality code.
+- Provide complete file contents for any modified or new files.
+- Write clean, well-documented code with appropriate error handling.
+- Never use ellipsis (...) or placeholder comments, as an excuse to omit code for brewity.
+</output_requirements>
+
+<context>
+    <codebase>
+Directory structure:
+└── /./
+    ├── index.html
+    ├── package.json
+    ├── src/
+    │   ├── core/
+    │   │   ├── editor/
+    │   │   │   ├── TerrainEditor.ts
+    │   │   │   └── WorkerBridge.ts
+    │   │   ├── Heightmap.ts
+    │   │   ├── Noise.ts
+    │   │   ├── ScatterSystem.ts
+    │   │   ├── SplatMaterial.ts
+    │   │   └── TerrainMesh.ts
+    │   └── main.ts
+    ├── tsconfig.json
+    ├── vite.config.ts
+    └── worker.gen.ts
+
+================================================
+File: /index.html
+================================================
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Three-Terrain Editor Prototype</title>
+  <style>
+    html,body,#app{margin:0;height:100%;overflow:hidden}
+    #gui{position:fixed;top:0;right:0;z-index:10}
+    canvas{display:block}
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
+
+
+================================================
+File: /package.json
+================================================
+{
+    "name": "threejs-terrain-editor",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+      "dev": "vite",
+      "build": "tsc && vite build",
+      "preview": "vite preview"
+    },
+    "dependencies": {
+      "three": "^0.176.0",
+      "lil-gui": "^0.18.0",
+      "simplex-noise": "^4.0.0"
+    },
+    "devDependencies": {
+      "typescript": "^5.4.0",
+      "vite": "^5.0.10",
+      "@types/three": "^0.176.0",
+      "@types/lil-gui": "^0.17.7"
+    }
+  }
+  
+
+================================================
+File: /src/core/editor/TerrainEditor.ts
+================================================
+import * as THREE from 'three';
+import GUI from 'lil-gui';
+import { TerrainMesh } from '../core/TerrainMesh';
+import { Heightmap } from '../core/Heightmap';
+import { generateHeight, NoiseOpts } from '../core/Noise';
+import { WorkerBridge } from './WorkerBridge';
+import { ScatterSystem } from '../core/ScatterSystem';
+
+export class TerrainEditor {
+  readonly scene: THREE.Scene;
+  readonly renderer: THREE.WebGLRenderer;
+
+  hmSize = 257;
+  hm!: Heightmap;
+  terrain!: TerrainMesh;
+  gui!: GUI;
+  worker = new WorkerBridge();
+
+  // ***** editor state *****
+  brush = { mode: 'raise', radius: 12, strength: 0.8 };
+  pointer = new THREE.Vector2();
+  raycaster = new THREE.Raycaster();
+  plane = new THREE.Plane(new THREE.Vector3(0,1,0));
+
+  // ***** noise params *****
+  noise: NoiseOpts = {
+    seed: 1, octaves: 6, amplitude: 1, frequency: 0.004,
+    persistence: 0.48, lacunarity: 2.2, ridged: 0.4,
+    warpAmplitude: 25, warpFreq: 0.01
+  };
+
+  constructor(scene: THREE.Scene, renderer: THREE.WebGLRenderer) {
+    this.scene = scene; this.renderer = renderer;
+    this.init();
+  }
+
+  async init() {
+    await this.#generateHeightmap();
+    this.terrain = new TerrainMesh(this.hmSize, 1, this.hm);
+    this.scene.add(this.terrain);
+
+    this.#setupLights();
+    this.#setupGUI();
+    this.#setupEvents();
+  }
+
+  async #generateHeightmap() {
+    // offline in worker
+    const buffer = await this.worker.generate(this.hmSize, this.noise);
+    this.hm = new Heightmap(this.hmSize, buffer);
+  }
+
+  #setupLights() {
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x444466, 0.8);
+    this.scene.add(hemi);
+    const dir = new THREE.DirectionalLight(0xffffff, 1);
+    dir.position.set(50,120,70);
+    dir.castShadow = false;
+    this.scene.add(dir);
+  }
+
+  #setupGUI() {
+    const gui = this.gui = new GUI({ width: 300 });
+    const noiseFolder = gui.addFolder('Noise');
+    noiseFolder.add(this.noise, 'seed', 0, 9999, 1).onFinishChange(()=>this.regen());
+    noiseFolder.add(this.noise, 'octaves', 1, 8, 1).onFinishChange(()=>this.regen());
+    noiseFolder.add(this.noise, 'frequency', 0.001, 0.02, 0.001).onFinishChange(()=>this.regen());
+    noiseFolder.add(this.noise, 'ridged', 0, 1, 0.01).onFinishChange(()=>this.regen());
+    noiseFolder.close();
+
+    const brush = gui.addFolder('Brush');
+    brush.add(this.brush, 'mode', ['raise','flatten','smooth']);
+    brush.add(this.brush, 'radius', 2, 40, 1);
+    brush.add(this.brush, 'strength', 0.1, 1, 0.05);
+    brush.close();
+
+    gui.add({ scatter: ()=>this.addScatter() }, 'scatter').name('Add Trees');
+  }
+
+  #setupEvents() {
+    const canvas = this.renderer.domElement;
+    canvas.addEventListener('pointermove', e => this.#onPointer(e));
+    canvas.addEventListener('pointerdown', e => this.#onPaint(e));
+  }
+
+  #onPointer(e: PointerEvent) {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointer.set(
+      ((e.clientX - rect.left)/rect.width)*2 - 1,
+      -((e.clientY - rect.top)/rect.height)*2 + 1
+    );
+  }
+  #onPaint(e: PointerEvent) {
+    if (e.button !== 0) return;
+    this.raycaster.setFromCamera(this.pointer, (this.scene as any).userData.camera); // camera injected in main.ts
+    const hit = this.raycaster.ray.intersectPlane(this.plane, new THREE.Vector3());
+    if (!hit) return;
+    // convert plane coords → hm indices
+    const u = (hit.x + this.hm.size/2);
+    const v = (hit.z + this.hm.size/2);
+    switch (this.brush.mode) {
+      case 'raise': {
+        this.hm.paintRaise(new THREE.Vector2(u,v), this.brush.radius, 0.005*this.brush.strength);
+        break;
+      }
+      case 'flatten': {
+        const target = this.hm.sample(u,v);
+        this.hm.paintFlatten(new THREE.Vector2(u,v), this.brush.radius, target, this.brush.strength);
+        break;
+      }
+      case 'smooth': {
+        this.hm.paintSmooth(new THREE.Vector2(u,v), this.brush.radius, this.brush.strength);
+        break;
+      }
+    }
+    this.terrain.updateGeometry();
+  }
+
+  async regen() {
+    this.gui.show();
+    const buffer = await this.worker.generate(this.hmSize, this.noise);
+    this.hm = new Heightmap(this.hmSize, buffer);
+    this.terrain.hm = this.hm;
+    this.terrain.updateGeometry();
+  }
+
+  addScatter() {
+    const treeGeo = new THREE.ConeGeometry(1,4,8);
+    const treeMat = new THREE.MeshStandardMaterial({ color:0x228822 });
+    const tree = new THREE.Mesh(treeGeo, treeMat);
+    const scatter = new ScatterSystem(this.terrain, this.hm, {
+      mesh: tree, density: 0.8, maxSlope: 0.6,
+      minHeight: 10, alignToNormal:false,
+      randomScale:[0.7,1.4]
+    });
+    this.scene.add(scatter.instanced);
+  }
+
+  resize() {}
+  update() {}
+}
+
+
+================================================
+File: /src/core/editor/WorkerBridge.ts
+================================================
+/**
+ * Thin wrapper for the generation web-worker.
+ * main thread ⇆ worker: { type:'gen', size, opts }  →  Float32Array
+ */
+import { NoiseOpts } from '../core/Noise';
+
+export class WorkerBridge {
+  #worker: Worker;
+
+  constructor() {
+    this.#worker = new Worker(new URL('./worker.gen.ts', import.meta.url), { type: 'module' });
+  }
+
+  generate(size: number, opts: NoiseOpts): Promise<Float32Array> {
+    return new Promise(res => {
+      const onMsg = (e: MessageEvent) => {
+        if (e.data.type === 'genDone') {
+          this.#worker.removeEventListener('message', onMsg);
+          res(e.data.buffer as Float32Array);
+        }
+      };
+      this.#worker.addEventListener('message', onMsg);
+      this.#worker.postMessage({ type:'gen', size, opts });
+    });
+  }
+}
+
+
+================================================
+File: /src/core/Heightmap.ts
+================================================
+import { Vector2 } from 'three';
+
+/** Mutable height-field with brush utilities */
+export class Heightmap {
+  #size: number;
+  #data: Float32Array;
+
+  constructor(size = 512, data?: Float32Array) {
+    this.#size = size;
+    this.#data = data ?? new Float32Array(size * size);
+  }
+  get size()   { return this.#size; }
+  get buffer() { return this.#data; }
+
+  /** Sampling height at int grid coords */
+  heightAt(x: number, z: number): number {
+    return this.#data[z * this.#size + x];
+  }
+  /** Bilinear sample at [0..size) coords */
+  sample(u: number, v: number): number {
+    const x0 = Math.floor(u), z0 = Math.floor(v);
+    const x1 = Math.min(x0 + 1, this.#size - 1);
+    const z1 = Math.min(z0 + 1, this.#size - 1);
+    const tx = u - x0, tz = v - z0;
+    const a = this.heightAt(x0, z0) * (1 - tx) + this.heightAt(x1, z0) * tx;
+    const b = this.heightAt(x0, z1) * (1 - tx) + this.heightAt(x1, z1) * tx;
+    return a * (1 - tz) + b * tz;
+  }
+
+  //
+  // ─── BRUSHES ────────────────────────────────────────────────────────────────
+  //
+
+  /** Raise / lower */
+  paintRaise(center: Vector2, radius: number, strength: number) {
+    this.#paint(center, radius, (h, falloff) => h + strength * falloff);
+  }
+
+  /** Flatten to sampled height */
+  paintFlatten(center: Vector2, radius: number, targetHeight: number, strength: number) {
+    this.#paint(center, radius, (h, falloff) => {
+      const delta = targetHeight - h;
+      return h + delta * strength * falloff;
+    });
+  }
+
+  /** Smooth (simple blur) */
+  paintSmooth(center: Vector2, radius: number, strength: number) {
+    const { #size } = this;
+    this.#paint(center, radius, (h, falloff, x, z) => {
+      const k = 0.15; // kernel coeff
+      let sum = 0, cnt = 0;
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx, nz = z + dz;
+          if (nx < 0 || nz < 0 || nx >= #size || nz >= #size) continue;
+          sum += this.heightAt(nx, nz); cnt++;
+        }
+      }
+      const avg = sum / cnt;
+      return h * (1 - k * strength * falloff) + avg * (k * strength * falloff);
+    });
+  }
+
+  // internal generic paint utility
+  #paint(
+    center: Vector2,
+    radius: number,
+    fn: (h: number, falloff: number, x: number, z: number) => number
+  ) {
+    const { #size } = this;
+    const cx = center.x, cz = center.y;
+    const rad2 = radius * radius;
+
+    const minX = Math.max(0, Math.floor(cx - radius));
+    const minZ = Math.max(0, Math.floor(cz - radius));
+    const maxX = Math.min(#size - 1, Math.ceil(cx + radius));
+    const maxZ = Math.min(#size - 1, Math.ceil(cz + radius));
+
+    for (let z = minZ; z <= maxZ; z++) {
+      for (let x = minX; x <= maxX; x++) {
+        const dx = x - cx, dz = z - cz;
+        const d2 = dx * dx + dz * dz;
+        if (d2 > rad2) continue;
+        const idx = z * #size + x;
+        const falloff = 1 - Math.sqrt(d2) / radius; // linear falloff
+        this.#data[idx] = fn(this.#data[idx], falloff, x, z);
+      }
+    }
+  }
+}
+
+
+================================================
+File: /src/core/Noise.ts
+================================================
+/**
+ * Procedural noise helpers:
+ *  – multi-octave Simplex fBm
+ *  – ridged multifractal variant
+ *  – domain-warp (2-D)
+ *
+ * Pure TS, no WebGL; heavy arrays are generated in a worker.
+ */
+import Simplex from 'simplex-noise';
+
+export interface NoiseOpts {
+  seed: string | number;
+  octaves: number;
+  amplitude: number;
+  frequency: number;
+  persistence: number;
+  lacunarity: number;
+  ridged: number;       // 0 = normal fBm, 1 = fully ridged
+  warpAmplitude: number;
+  warpFreq: number;
+}
+
+export function generateHeight(
+  size: number,
+  opts: NoiseOpts,
+  out: Float32Array = new Float32Array(size * size)
+): Float32Array {
+  const simplex = new Simplex(opts.seed.toString());
+  const { octaves, amplitude, frequency, persistence, lacunarity, ridged, warpAmplitude, warpFreq } = opts;
+
+  let idx = 0;
+  for (let z = 0; z < size; z++) {
+    for (let x = 0; x < size; x++) {
+      // domain warp
+      const warpX = x + warpAmplitude * simplex.noise2D(x * warpFreq, z * warpFreq);
+      const warpZ = z + warpAmplitude * simplex.noise2D((x + 1000) * warpFreq, (z + 1000) * warpFreq);
+
+      let amp = amplitude;
+      let freq = frequency;
+      let height = 0;
+
+      for (let o = 0; o < octaves; o++) {
+        let n = simplex.noise2D(warpX * freq, warpZ * freq);
+        if (ridged > 0) {
+          n = 1 - Math.abs(n);       // turn valleys into ridges
+          n *= n;                    // sharper
+          n *= ridged;               // interpolate between normal & ridged
+        }
+        height += n * amp;
+        amp *= persistence;
+        freq *= lacunarity;
+      }
+      out[idx++] = height;
+    }
+  }
+  normalize(out);
+  return out;
+}
+
+function normalize(arr: Float32Array) {
+  let min = Infinity, max = -Infinity;
+  for (let v of arr) { if (v < min) min = v; if (v > max) max = v; }
+  const range = max - min;
+  for (let i = 0; i < arr.length; i++) arr[i] = (arr[i] - min) / range;
+}
+
+
+================================================
+File: /src/core/ScatterSystem.ts
+================================================
+/**
+ * Instanced scatter objects obeying filters.
+ */
+import * as THREE from 'three';
+import { Heightmap } from './Heightmap';
+
+export interface ScatterOpts {
+  mesh: THREE.Mesh;
+  density: number;              // instances / 1000 units²
+  minSlope?: number;
+  maxSlope?: number;
+  minHeight?: number;
+  maxHeight?: number;
+  randomScale?: [number, number];
+  alignToNormal?: boolean;
+}
+
+export class ScatterSystem {
+  instanced: THREE.InstancedMesh;
+  #nextId = 0;
+
+  constructor(
+    terrain: THREE.Mesh,
+    hm: Heightmap,
+    opts: ScatterOpts
+  ) {
+    const area = hm.size * hm.size;
+    const count = Math.floor(opts.density * area / 1_000);
+    this.instanced = new THREE.InstancedMesh(opts.mesh.geometry, opts.mesh.material, count);
+
+    const dummy = new THREE.Object3D();
+    const normal = new THREE.Vector3();
+    const up     = new THREE.Vector3(0,1,0);
+
+    let placed = 0;
+    while (placed < count) {
+      const x = Math.random() * hm.size;
+      const z = Math.random() * hm.size;
+      const h = hm.sample(x, z) * 120;
+      const slope = 0; // TODO: compute local slope if needed
+      if (opts.minHeight && h < opts.minHeight) continue;
+      if (opts.maxHeight && h > opts.maxHeight) continue;
+      if (opts.minSlope && slope < opts.minSlope) continue;
+      if (opts.maxSlope && slope > opts.maxSlope) continue;
+
+      dummy.position.set(x - hm.size/2, h, z - hm.size/2);
+      dummy.rotation.y = Math.random() * Math.PI * 2;
+      const scl = rand(opts.randomScale ?? [0.8, 1.2]);
+      dummy.scale.setScalar(scl);
+
+      if (opts.alignToNormal) {
+        // naive: normal from heightmap gradient
+        const nx = hm.sample(x + 1, z) - hm.sample(x - 1, z);
+        const nz = hm.sample(x, z + 1) - hm.sample(x, z - 1);
+        normal.set(-nx, 2, -nz).normalize();
+        dummy.quaternion.setFromUnitVectors(up, normal);
+      }
+      dummy.updateMatrix();
+      this.instanced.setMatrixAt(placed++, dummy.matrix);
+    }
+    this.instanced.instanceMatrix.needsUpdate = true;
+  }
+}
+
+function rand([a,b]:[number,number]) { return a + Math.random()*(b-a); }
+
+
+================================================
+File: /src/core/SplatMaterial.ts
+================================================
+/**
+ * Triplanar-mapped multi-material terrain shader.
+ * – takes 4 textures (diff+norm) + RGBA splat map
+ * – optional texture-bombing UV perturbation (toggle)
+ */
+import * as THREE from 'three';
+
+export interface MaterialTextures {
+  color: THREE.Texture, normal?: THREE.Texture, roughness?: THREE.Texture
+}
+
+export interface SplatMaterialProps {
+  tiles: number;
+  tex: [MaterialTextures, MaterialTextures, MaterialTextures, MaterialTextures];
+  splat: THREE.Texture;
+  texBombing?: boolean;
+}
+
+export function createSplatMaterial({
+  tiles, tex, splat, texBombing = false
+}: SplatMaterialProps): THREE.ShaderMaterial {
+
+  const uniforms: Record<string, THREE.IUniform> = {
+    uSplat: { value: splat },
+    uTiles: { value: tiles },
+    uBomb:  { value: texBombing ? 1 : 0 },
+  };
+
+  // Pack textures
+  tex.forEach((m, i) => {
+    uniforms[`uColor${i}`] = { value: m.color };
+    uniforms[`uNormal${i}`] = { value: m.normal ?? new THREE.Texture() };
+  });
+
+  const defines = `
+    #define TEX_BOMB ${texBombing ? 1 : 0}
+  `;
+
+  const code = /* glsl */`
+    ${defines}
+
+    uniform sampler2D uSplat;
+    uniform float uTiles;
+    uniform int uBomb;
+
+    vec3 sampleTriplanar(sampler2D tex, vec3 wp, vec3 wn) {
+      vec3 a = abs(wn);
+      vec3 uvx = wp.yz * uTiles;
+      vec3 uvy = wp.zx * uTiles;
+      vec3 uvz = wp.xy * uTiles;
+
+      #if TEX_BOMB==1
+      uvx += hash21(uvx.xy) * 4.0;
+      uvy += hash21(uvy.xy) * 4.0;
+      uvz += hash21(uvz.xy) * 4.0;
+      #endif
+
+      vec3 cx = texture2D(tex, uvx.xy).rgb;
+      vec3 cy = texture2D(tex, uvy.xy).rgb;
+      vec3 cz = texture2D(tex, uvz.xy).rgb;
+      return (cx * a.x + cy * a.y + cz * a.z) / (a.x + a.y + a.z);
+    }
+
+    // hash util
+    float hash21(vec2 p) { return fract(sin(dot(p, vec2(27.1,91.7))) * 43758.5453); }
+
+    varying vec3 vPos;
+    varying vec3 vNorm;
+
+    void main() {
+      vPos  = (modelMatrix * vec4(position,1.0)).xyz;
+      vNorm = normalMatrix * normal;
+      gl_Position = projectionMatrix * viewMatrix * vec4(vPos,1.0);
+    }
+  `;
+
+  const frag = /* glsl */`
+    ${defines}
+    varying vec3 vPos;
+    varying vec3 vNorm;
+
+    uniform sampler2D uSplat;
+    uniform float uTiles;
+    uniform sampler2D uColor0; uniform sampler2D uColor1;
+    uniform sampler2D uColor2; uniform sampler2D uColor3;
+
+    #include <lights_pars_begin>
+
+    vec3 sampleLayer(int id, vec3 wp, vec3 wn) {
+      if (id==0) return sampleTriplanar(uColor0, wp, wn);
+      if (id==1) return sampleTriplanar(uColor1, wp, wn);
+      if (id==2) return sampleTriplanar(uColor2, wp, wn);
+      return sampleTriplanar(uColor3, wp, wn);
+    }
+
+    void main() {
+      vec4 weights = texture2D(uSplat, vPos.xz / uTiles);
+      vec3 nrm = normalize(vNorm);
+      vec3 color =
+        sampleLayer(0, vPos, nrm) * weights.r +
+        sampleLayer(1, vPos, nrm) * weights.g +
+        sampleLayer(2, vPos, nrm) * weights.b +
+        sampleLayer(3, vPos, nrm) * weights.a;
+
+      gl_FragColor = vec4(color, 1.0);
+    }
+  `;
+
+  const mat = new THREE.ShaderMaterial({
+    uniforms, vertexShader: code, fragmentShader: frag, lights: true
+  });
+  mat.defines = { ...mat.defines, ...{ MAX_POINT_LIGHTS: 4 } };
+  mat.uniformsNeedUpdate = true;
+  return mat;
+}
+
+
+================================================
+File: /src/core/TerrainMesh.ts
+================================================
+import * as THREE from 'three';
+import { Heightmap } from './Heightmap';
+import { createSplatMaterial } from './SplatMaterial';
+
+export class TerrainMesh extends THREE.Mesh {
+  readonly hm: Heightmap;
+  #geometry: THREE.PlaneGeometry;
+
+  constructor(size = 512, scale = 1, hm?: Heightmap) {
+    const heightmap = hm ?? new Heightmap(size);
+    const geom = new THREE.PlaneGeometry(size, size, size - 1, size - 1);
+    geom.rotateX(-Math.PI / 2);
+
+    // dummy placeholder textures (white pixel)
+    const white = new THREE.Texture(new ImageData(1, 1));
+    white.needsUpdate = true;
+    const material = createSplatMaterial({
+      tiles: 128,
+      tex: [
+        { color: white },
+        { color: white },
+        { color: white },
+        { color: white }
+      ],
+      splat: white
+    });
+    super(geom, material);
+    this.hm = heightmap;
+    this.#geometry = geom;
+    this.updateGeometry();
+  }
+
+  updateGeometry() {
+    const { hm, #geometry } = this;
+    const verts = #geometry.attributes.position as THREE.BufferAttribute;
+    const sz = hm.size;
+    for (let z = 0; z < sz; z++) {
+      for (let x = 0; x < sz; x++) {
+        const idx = (z * sz + x) * 3 + 1;          // y component
+        verts.array[idx] = hm.heightAt(x, z) * 120;
+      }
+    }
+    verts.needsUpdate = true;
+    #geometry.computeVertexNormals();
+  }
+}
+
+
+================================================
+File: /src/main.ts
+================================================
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TerrainEditor } from './editor/TerrainEditor';
+
+const container = document.getElementById('app')!;
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x88bbff);
+container.appendChild(renderer.domElement);
+
+// Scene / camera
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x88bbff, 150, 900);
+
+const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 2000);
+camera.position.set(0, 120, 180);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI * 0.495;
+
+// Editor core
+const editor = new TerrainEditor(scene, renderer);
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  editor.resize();
+});
+
+function loop() {
+  requestAnimationFrame(loop);
+  controls.update();
+  editor.update();
+  renderer.render(scene, camera);
+}
+loop();
+
+
+================================================
+File: /tsconfig.json
+================================================
+{
+    "compilerOptions": {
+      "target": "ES2022",
+      "module": "ESNext",
+      "moduleResolution": "Bundler",
+      "lib": ["DOM", "ES2022"],
+      "strict": true,
+      "esModuleInterop": true,
+      "skipLibCheck": true,
+      "forceConsistentCasingInFileNames": true,
+      "sourceMap": true,
+      "outDir": "dist"
+    },
+    "include": ["src"]
+  }
+  
+
+================================================
+File: /vite.config.ts
+================================================
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  server: { port: 5173 },
+  build: { target: 'es2022' }
+});
+
+
+================================================
+File: /worker.gen.ts
+================================================
+import { generateHeight } from '../core/Noise';
+
+self.addEventListener('message', (e: MessageEvent) => {
+  if (e.data.type === 'gen') {
+    const { size, opts } = e.data;
+    const buf = generateHeight(size, opts);
+    self.postMessage({ type:'genDone', buffer: buf }, [buf.buffer]);
+  }
+});
+    </codebase>
+</context>
