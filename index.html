@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weltbuilder - Terrain Editor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            overflow: hidden;
+        }
+        
+        #app {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+        }
+        
+        #viewport {
+            flex: 1;
+            position: relative;
+        }
+        
+        #canvas {
+            display: block;
+            cursor: grab;
+        }
+        
+        #canvas:active {
+            cursor: grabbing;
+        }
+        
+        #controls {
+            width: 300px;
+            background: #2a2a2a;
+            border-left: 1px solid #444;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        
+        .control-group {
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid #444;
+        }
+        
+        .control-group:last-child {
+            border-bottom: none;
+        }
+        
+        .control-group h3 {
+            color: #fff;
+            margin-bottom: 12px;
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .control-item {
+            margin-bottom: 12px;
+        }
+        
+        .control-item label {
+            display: block;
+            font-size: 12px;
+            color: #ccc;
+            margin-bottom: 4px;
+        }
+        
+        .control-item input[type="range"] {
+            width: 100%;
+            height: 4px;
+            background: #444;
+            border-radius: 2px;
+            outline: none;
+        }
+        
+        .control-item input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 14px;
+            height: 14px;
+            background: #0066cc;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+        
+        .control-item input[type="number"] {
+            width: 100%;
+            padding: 6px 8px;
+            background: #333;
+            border: 1px solid #555;
+            border-radius: 4px;
+            color: #e0e0e0;
+            font-size: 12px;
+        }
+        
+        .control-item button {
+            width: 100%;
+            padding: 8px 12px;
+            background: #0066cc;
+            border: none;
+            border-radius: 4px;
+            color: white;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .control-item button:hover {
+            background: #0052a3;
+        }
+        
+        .control-item button:active {
+            background: #004080;
+        }
+        
+        .value-display {
+            font-size: 11px;
+            color: #aaa;
+            text-align: right;
+        }
+        
+        #status {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #ccc;
+            pointer-events: none;
+        }
+        
+        .brush-modes {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .brush-mode {
+            flex: 1;
+            min-width: 60px;
+            padding: 6px;
+            background: #444;
+            border: 1px solid #555;
+            border-radius: 3px;
+            font-size: 11px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.2s;
+        }
+        
+        .brush-mode.active {
+            background: #0066cc;
+            border-color: #0066cc;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div id="viewport">
+            <canvas id="canvas"></canvas>
+            <div id="status">
+                Orbit Mode: Drag to rotate, wheel to zoom | Brush Mode: Click and drag to sculpt
+            </div>
+        </div>
+        
+        <div id="controls">
+            <div class="control-group">
+                <h3>Terrain Generation</h3>
+                
+                <div class="control-item">
+                    <label>Size (km)</label>
+                    <input type="range" id="terrainSize" min="1" max="20" value="5" step="1">
+                    <div class="value-display" id="terrainSizeValue">5 km</div>
+                </div>
+                
+                <div class="control-item">
+                    <label>Noise Scale</label>
+                    <input type="range" id="noiseScale" min="0.001" max="0.1" value="0.02" step="0.001">
+                    <div class="value-display" id="noiseScaleValue">0.020</div>
+                </div>
+                
+                <div class="control-item">
+                    <label>Amplitude</label>
+                    <input type="range" id="amplitude" min="0" max="200" value="50" step="5">
+                    <div class="value-display" id="amplitudeValue">50m</div>
+                </div>
+                
+                <div class="control-item">
+                    <label>Octaves</label>
+                    <input type="range" id="octaves" min="1" max="8" value="4" step="1">
+                    <div class="value-display" id="octavesValue">4</div>
+                </div>
+                
+                <div class="control-item">
+                    <label>Seed</label>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <input type="number" id="seed" value="123456" style="flex: 1;">
+                        <button id="randomizeSeed" style="width: auto; padding: 6px 8px; font-size: 11px;">🎲</button>
+                    </div>
+                    <div class="value-display" id="seedValue">123456</div>
+                </div>
+                
+                <div class="control-item">
+                    <label>
+                        <input type="checkbox" id="gridToggle" checked style="margin-right: 6px;">
+                        Show Grid
+                    </label>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <h3>Brush Tools</h3>
+                
+                <div class="brush-modes">
+                    <div class="brush-mode active" data-mode="raise">Raise</div>
+                    <div class="brush-mode" data-mode="lower">Lower</div>
+                    <div class="brush-mode" data-mode="smooth">Smooth</div>
+                    <div class="brush-mode" data-mode="flatten">Flatten</div>
+                </div>
+                
+                <div class="control-item">
+                    <label>Brush Size</label>
+                    <input type="range" id="brushSize" min="1" max="50" value="10" step="1">
+                    <div class="value-display" id="brushSizeValue">10m</div>
+                </div>
+                
+                <div class="control-item">
+                    <label>Brush Strength</label>
+                    <input type="range" id="brushStrength" min="0.1" max="2.0" value="0.5" step="0.1">
+                    <div class="value-display" id="brushStrengthValue">0.5</div>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <h3>Export</h3>
+                
+                <div class="control-item">
+                    <button id="exportHeightmap">Export Heightmap</button>
+                </div>
+                
+                <div class="control-item">
+                    <button id="exportProject">Export Project</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script type="module" src="/src/main.ts"></script>
+</body>
+</html> 
