@@ -166,6 +166,39 @@
             background: #0066cc;
             border-color: #0066cc;
         }
+        
+        .mountain-preset {
+            background: #8B4513 !important;
+            border: 1px solid #A0522D !important;
+        }
+        
+        .mountain-preset:hover {
+            background: #A0522D !important;
+        }
+        
+        .mountain-preset:active {
+            background: #654321 !important;
+        }
+        
+        .erosion-preset {
+            background: #2E8B57 !important;
+            border: 1px solid #3CB371 !important;
+            margin-bottom: 4px;
+        }
+        
+        .erosion-preset:hover {
+            background: #3CB371 !important;
+        }
+        
+        .erosion-preset:active {
+            background: #228B22 !important;
+        }
+        
+        .erosion-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4px;
+        }
     </style>
 </head>
 <body>
@@ -230,11 +263,12 @@
                     <div class="brush-mode" data-mode="lower">Lower</div>
                     <div class="brush-mode" data-mode="smooth">Smooth</div>
                     <div class="brush-mode" data-mode="flatten">Flatten</div>
+                    <div class="brush-mode" data-mode="mountain">Mountain</div>
                 </div>
                 
                 <div class="control-item">
                     <label>Brush Size</label>
-                    <input type="range" id="brushSize" min="1" max="50" value="10" step="1">
+                    <input type="range" id="brushSize" min="1" max="500" value="10" step="1">
                     <div class="value-display" id="brushSizeValue">10m</div>
                 </div>
                 
@@ -242,6 +276,87 @@
                     <label>Brush Strength</label>
                     <input type="range" id="brushStrength" min="0.1" max="2.0" value="0.5" step="0.1">
                     <div class="value-display" id="brushStrengthValue">0.5</div>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <h3>Mountain Presets</h3>
+                
+                <div class="control-item">
+                    <button id="alaskanPreset" class="mountain-preset">🏔️ Alaskan/Everest</button>
+                </div>
+                
+                <div class="control-item">
+                    <button id="desertPreset" class="mountain-preset">🏜️ Nevada/New Mexico</button>
+                </div>
+                
+                <div class="control-item" style="font-size: 11px; color: #aaa; line-height: 1.4;">
+                    Large specialized brushes for creating realistic mountain ranges. Switch to Brush Mode to apply.
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <h3>Erosion Presets</h3>
+                
+                <div class="control-item">
+                    <button id="gentleErosion" class="erosion-preset">🌧️ Gentle Rain</button>
+                </div>
+                
+                <div class="control-item">
+                    <button id="moderateErosion" class="erosion-preset">⛈️ Moderate Storm</button>
+                </div>
+                
+                <div class="control-item">
+                    <button id="intenseErosion" class="erosion-preset">🌊 Intense Erosion</button>
+                </div>
+                
+                <div class="erosion-grid">
+                    <div class="control-item">
+                        <button id="desertErosion" class="erosion-preset">🏜️ Desert</button>
+                    </div>
+                    <div class="control-item">
+                        <button id="tropicalErosion" class="erosion-preset">🌴 Tropical</button>
+                    </div>
+                </div>
+                
+                <div class="control-item">
+                    <button id="createRiver" class="erosion-preset">🏞️ Create River</button>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <h3>Custom Erosion</h3>
+                
+                <div class="control-item">
+                    <label>Iterations</label>
+                    <input type="range" id="erosionIterations" min="10" max="500" value="100" step="10">
+                    <div class="value-display" id="erosionIterationsValue">100</div>
+                </div>
+                
+                <div class="control-item">
+                    <label>Rain Strength</label>
+                    <input type="range" id="rainStrength" min="0.001" max="0.1" value="0.02" step="0.001">
+                    <div class="value-display" id="rainStrengthValue">0.020</div>
+                </div>
+                
+                <div class="control-item">
+                    <label>Erosion Strength</label>
+                    <input type="range" id="erosionStrength" min="0.1" max="1.0" value="0.3" step="0.05">
+                    <div class="value-display" id="erosionStrengthValue">0.30</div>
+                </div>
+                
+                <div class="control-item">
+                    <label>Thermal Rate</label>
+                    <input type="range" id="thermalRate" min="0.01" max="0.5" value="0.1" step="0.01">
+                    <div class="value-display" id="thermalRateValue">0.10</div>
+                </div>
+                
+                <div class="control-item">
+                    <button id="applyCustomErosion">Apply Custom Erosion</button>
+                </div>
+                
+                <div class="control-item" style="font-size: 11px; color: #aaa; line-height: 1.4;">
+                    Simulates water droplet erosion and thermal weathering. Higher values = more dramatic effects.
                 </div>
             </div>
             

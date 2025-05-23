@@ -2,6 +2,8 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three-stdlib'
 import { TerrainGenerator } from './TerrainGenerator'
 import { BrushSystem } from './BrushSystem'
+import { ErosionSystem, ErosionConfig } from './ErosionSystem'
+import { AdvancedErosionSystem, AdvancedErosionConfig } from './AdvancedErosionSystem'
 
 export interface TerrainConfig {
   size: number // Size in kilometers
@@ -24,6 +26,8 @@ export class TerrainBuilder {
   private terrain: THREE.Mesh | null = null
   private terrainGenerator: TerrainGenerator
   private brushSystem: BrushSystem
+  private erosionSystem: ErosionSystem
+  private advancedErosionSystem: AdvancedErosionSystem
   private gridHelper: THREE.GridHelper | null = null
   
   private mode: EditorMode = 'orbit'
@@ -57,6 +61,8 @@ export class TerrainBuilder {
     this.controls = new OrbitControls(this.camera, this.canvas)
     this.terrainGenerator = new TerrainGenerator(this.config.seed)
     this.brushSystem = new BrushSystem()
+    this.erosionSystem = new ErosionSystem()
+    this.advancedErosionSystem = new AdvancedErosionSystem()
     
     // Create noise preview canvas
     this.noisePreviewCanvas = this.createNoisePreviewCanvas()
@@ -371,5 +377,428 @@ export class TerrainBuilder {
 
   public isGridVisible(): boolean {
     return this.gridHelper ? this.gridHelper.visible : false
+  }
+
+  // Erosion System Methods
+  public applyErosion(erosionConfig?: Partial<ErosionConfig>): void {
+    if (!this.terrain) {
+      console.warn('No terrain available for erosion')
+      return
+    }
+
+    // Update erosion config if provided
+    if (erosionConfig) {
+      this.erosionSystem.updateConfig(erosionConfig)
+    }
+
+    // Get current height data from brush system
+    const currentHeightData = this.brushSystem.getHeightData()
+    
+    // Apply erosion
+    this.erosionSystem.setHeightData(currentHeightData, this.config.resolution)
+    const erodedHeightData = this.erosionSystem.applyErosion()
+    
+    // Update terrain with eroded data
+    this.updateTerrainGeometry(erodedHeightData)
+    
+    // Update brush system with new height data
+    this.brushSystem.setTerrain(this.terrain!, erodedHeightData, this.config.resolution)
+    this.brushSystem.updateTerrainColors()
+  }
+
+  public getErosionSystem(): ErosionSystem {
+    return this.erosionSystem
+  }
+
+  public updateErosionConfig(config: Partial<ErosionConfig>): void {
+    this.erosionSystem.updateConfig(config)
+  }
+
+  public getErosionConfig(): ErosionConfig {
+    return this.erosionSystem.getConfig()
+  }
+
+  public createRiver(startX: number, startY: number, endX: number, endY: number): void {
+    if (!this.terrain) {
+      console.warn('No terrain available for river creation')
+      return
+    }
+
+    // Convert world coordinates to grid coordinates
+    const gridStartX = ((startX / (this.config.size * 1000)) + 0.5) * this.config.resolution
+    const gridStartY = ((startY / (this.config.size * 1000)) + 0.5) * this.config.resolution
+    const gridEndX = ((endX / (this.config.size * 1000)) + 0.5) * this.config.resolution
+    const gridEndY = ((endY / (this.config.size * 1000)) + 0.5) * this.config.resolution
+
+    // Apply river erosion
+    const currentHeightData = this.brushSystem.getHeightData()
+    this.erosionSystem.setHeightData(currentHeightData, this.config.resolution)
+    this.erosionSystem.createRiverErosion(gridStartX, gridStartY, gridEndX, gridEndY)
+    
+    // Get updated height data and update terrain
+    const erodedHeightData = this.erosionSystem.applyErosion()
+    this.updateTerrainGeometry(erodedHeightData)
+    
+    // Update brush system
+    this.brushSystem.setTerrain(this.terrain!, erodedHeightData, this.config.resolution)
+    this.brushSystem.updateTerrainColors()
+  }
+
+  public getWaterFlowVisualization(): Float32Array {
+    return this.erosionSystem.getWaterFlow()
+  }
+
+  public getSedimentVisualization(): Float32Array {
+    return this.erosionSystem.getSedimentMap()
+  }
+
+  private updateTerrainGeometry(heightData: Float32Array): void {
+    if (!this.terrain) return
+
+    const geometry = this.terrain.geometry as THREE.PlaneGeometry
+    const vertices = geometry.attributes.position.array as Float32Array
+
+    // Update vertex heights
+    for (let i = 0; i < heightData.length; i++) {
+      vertices[i * 3 + 2] = heightData[i] // Z coordinate (height)
+    }
+
+    geometry.attributes.position.needsUpdate = true
+    geometry.computeVertexNormals()
+
+    // Update vertex colors based on new heights
+    const colors = geometry.attributes.color.array as Float32Array
+    const minHeight = Math.min(...heightData)
+    const maxHeight = Math.max(...heightData)
+    
+    for (let i = 0; i < heightData.length; i++) {
+      const normalizedHeight = (heightData[i] - minHeight) / (maxHeight - minHeight)
+      const grayValue = normalizedHeight * 0.8 + 0.2
+      
+      colors[i * 3] = grayValue     // R
+      colors[i * 3 + 1] = grayValue // G
+      colors[i * 3 + 2] = grayValue // B
+    }
+    
+    geometry.attributes.color.needsUpdate = true
+  }
+
+  // Preset erosion configurations
+  public applyGentleErosion(): void {
+    this.applyErosion({
+      rainStrength: 0.01,
+      erosionStrength: 0.1,
+      iterations: 50,
+      thermalRate: 0.05
+    })
+  }
+
+  public applyModerateErosion(): void {
+    this.applyErosion({
+      rainStrength: 0.02,
+      erosionStrength: 0.3,
+      iterations: 100,
+      thermalRate: 0.1
+    })
+  }
+
+  public applyIntenseErosion(): void {
+    this.applyErosion({
+      rainStrength: 0.04,
+      erosionStrength: 0.5,
+      iterations: 200,
+      thermalRate: 0.2
+    })
+  }
+
+  public applyDesertErosion(): void {
+    this.applyErosion({
+      rainStrength: 0.005,
+      erosionStrength: 0.1,
+      thermalRate: 0.3,
+      angleOfRepose: 45,
+      iterations: 150
+    })
+  }
+
+  public applyTropicalErosion(): void {
+    this.applyErosion({
+      rainStrength: 0.06,
+      erosionStrength: 0.4,
+      vegetationProtection: true,
+      riverbedErosion: 2.0,
+      iterations: 120
+    })
+  }
+
+  // Advanced Erosion System Methods - Ultra Realistic Geomorphology
+  public applyAdvancedErosion(config?: Partial<AdvancedErosionConfig>): void {
+    if (!this.terrain) {
+      console.warn('No terrain available for advanced erosion')
+      return
+    }
+
+    // Update config if provided
+    if (config) {
+      this.advancedErosionSystem.updateConfig(config)
+    }
+
+    // Get current height data
+    const currentHeightData = this.brushSystem.getHeightData()
+    
+    // Apply advanced geomorphological erosion
+    this.advancedErosionSystem.setHeightData(currentHeightData, this.config.resolution, this.config.size * 1000)
+    const erodedHeightData = this.advancedErosionSystem.applyAdvancedErosion()
+    
+    // Update terrain with eroded data
+    this.updateTerrainGeometry(erodedHeightData)
+    
+    // Update brush system with new height data
+    this.brushSystem.setTerrain(this.terrain!, erodedHeightData, this.config.resolution)
+    this.brushSystem.updateTerrainColors()
+  }
+
+  public getAdvancedErosionSystem(): AdvancedErosionSystem {
+    return this.advancedErosionSystem
+  }
+
+  public updateAdvancedErosionConfig(config: Partial<AdvancedErosionConfig>): void {
+    this.advancedErosionSystem.updateConfig(config)
+  }
+
+  public getAdvancedErosionConfig(): AdvancedErosionConfig {
+    return this.advancedErosionSystem.getConfig()
+  }
+
+  // Realistic geological preset erosions
+  public applyRealisticMountainEvolution(): void {
+    this.applyAdvancedErosion({
+      streamPowerLaw: {
+        incisionConstant: 2e-6,
+        areaExponent: 0.5,
+        slopeExponent: 1.0,
+        criticalDrainage: 500
+      },
+      tectonics: {
+        upliftRate: 0.5, // active mountain building
+        upliftPattern: 'dome',
+        faultLines: []
+      },
+      climate: {
+        precipitation: 1500,
+        temperature: 5, // alpine climate
+        vegetationCover: 0.3,
+        seasonality: 0.3
+      },
+      advanced: {
+        enableMeandering: false, // mountains don't have large meandering rivers
+        enableMassWasting: true,
+        enableGlacialErosion: false,
+        enableChemicalWeathering: true,
+        enableKnickpointMigration: true,
+        timeStep: 50,
+        totalTime: 50000 // 50,000 years of evolution
+      }
+    })
+  }
+
+  public applyRealisticRiverSystemEvolution(): void {
+    this.applyAdvancedErosion({
+      streamPowerLaw: {
+        incisionConstant: 1e-6,
+        areaExponent: 0.5,
+        slopeExponent: 1.0,
+        criticalDrainage: 1000
+      },
+      tectonics: {
+        upliftRate: 0.1, // slow, stable region
+        upliftPattern: 'uniform',
+        faultLines: []
+      },
+      climate: {
+        precipitation: 1200,
+        temperature: 15,
+        vegetationCover: 0.7,
+        seasonality: 0.2
+      },
+      advanced: {
+        enableMeandering: true,
+        enableMassWasting: false,
+        enableGlacialErosion: false,
+        enableChemicalWeathering: true,
+        enableKnickpointMigration: true,
+        timeStep: 100,
+        totalTime: 100000 // 100,000 years - longer for river development
+      }
+    })
+  }
+
+  public applyRealisticDesertEvolution(): void {
+    this.applyAdvancedErosion({
+      streamPowerLaw: {
+        incisionConstant: 0.5e-6, // limited water erosion
+        areaExponent: 0.4,
+        slopeExponent: 1.2,
+        criticalDrainage: 2000 // larger drainage required for channels
+      },
+      diffusion: {
+        soilDiffusivity: 0.005, // limited soil
+        thermalDiffusivity: 0.002, // more thermal erosion
+        criticalSlope: 45 * Math.PI / 180 // steeper stable slopes
+      },
+      tectonics: {
+        upliftRate: 0.05, // very slow
+        upliftPattern: 'uniform',
+        faultLines: []
+      },
+      climate: {
+        precipitation: 200, // arid
+        temperature: 25,
+        vegetationCover: 0.1,
+        seasonality: 0.4 // high seasonality in desert
+      },
+      advanced: {
+        enableMeandering: false,
+        enableMassWasting: true,
+        enableGlacialErosion: false,
+        enableChemicalWeathering: false, // limited chemical weathering
+        enableKnickpointMigration: false,
+        timeStep: 200,
+        totalTime: 200000 // long-term arid evolution
+      }
+    })
+  }
+
+  public applyRealisticCoastalEvolution(): void {
+    this.applyAdvancedErosion({
+      streamPowerLaw: {
+        incisionConstant: 3e-6, // strong marine erosion
+        areaExponent: 0.6,
+        slopeExponent: 0.8,
+        criticalDrainage: 200
+      },
+      tectonics: {
+        upliftRate: 0.2,
+        upliftPattern: 'ridge', // coastal range
+        faultLines: []
+      },
+      climate: {
+        precipitation: 2000, // wet maritime climate
+        temperature: 12,
+        vegetationCover: 0.8,
+        seasonality: 0.1 // low seasonality in maritime climate
+      },
+      advanced: {
+        enableMeandering: true,
+        enableMassWasting: true,
+        enableGlacialErosion: false,
+        enableChemicalWeathering: true,
+        enableKnickpointMigration: true,
+        timeStep: 75,
+        totalTime: 75000
+      }
+    })
+  }
+
+  public applyRealisticGlacialValleyEvolution(): void {
+    this.applyAdvancedErosion({
+      streamPowerLaw: {
+        incisionConstant: 5e-6, // enhanced by glacial processes
+        areaExponent: 0.3, // glacial flow is different
+        slopeExponent: 1.5,
+        criticalDrainage: 100
+      },
+      diffusion: {
+        soilDiffusivity: 0.02, // freeze-thaw enhanced
+        thermalDiffusivity: 0.005,
+        criticalSlope: 25 * Math.PI / 180 // glacial oversteepening
+      },
+      tectonics: {
+        upliftRate: 0.3,
+        upliftPattern: 'ridge',
+        faultLines: []
+      },
+      climate: {
+        precipitation: 1000,
+        temperature: -2, // below freezing
+        vegetationCover: 0.1,
+        seasonality: 0.5 // high seasonal variation
+      },
+      advanced: {
+        enableMeandering: false,
+        enableMassWasting: true,
+        enableGlacialErosion: true,
+        enableChemicalWeathering: false, // limited in cold
+        enableKnickpointMigration: false,
+        timeStep: 100,
+        totalTime: 100000
+      }
+    })
+  }
+
+  // Create realistic fault systems
+  public addRealisticFaultSystem(): void {
+    const config = this.advancedErosionSystem.getConfig()
+    const resolution = this.config.resolution
+    
+    // Add a major fault line across the terrain
+    const majorFault = {
+      x1: resolution * 0.1,
+      y1: resolution * 0.2,
+      x2: resolution * 0.9,
+      y2: resolution * 0.8,
+      offset: 20 // 20m offset
+    }
+    
+    // Add some secondary faults
+    const secondaryFaults = [
+      {
+        x1: resolution * 0.3,
+        y1: resolution * 0.1,
+        x2: resolution * 0.7,
+        y2: resolution * 0.6,
+        offset: -8
+      },
+      {
+        x1: resolution * 0.1,
+        y1: resolution * 0.7,
+        x2: resolution * 0.4,
+        y2: resolution * 0.9,
+        offset: 5
+      }
+    ]
+    
+    config.tectonics.faultLines = [majorFault, ...secondaryFaults]
+    this.advancedErosionSystem.updateConfig(config)
+  }
+
+  // Get advanced erosion data for visualization
+  public getAdvancedErosionData() {
+    return this.advancedErosionSystem.getErosionResults()
+  }
+
+  // Create realistic drainage networks
+  public generateRealisticDrainageNetwork(): void {
+    this.advancedErosionSystem.createRealisticRiverNetwork()
+  }
+
+  // Export advanced erosion data
+  public exportAdvancedErosionData(): string {
+    const results = this.advancedErosionSystem.getErosionResults()
+    const exportData = {
+      config: this.config,
+      erosionConfig: this.advancedErosionSystem.getConfig(),
+      elevation: Array.from(results.elevation),
+      drainageArea: Array.from(results.drainageArea),
+      streamPower: Array.from(results.streamPower),
+      sedimentThickness: Array.from(results.sedimentThickness),
+      vegetationCover: Array.from(results.vegetationCover),
+      timeEvolved: results.timeEvolved,
+      riverNetwork: results.riverNetwork,
+      knickpoints: results.knickpoints,
+      timestamp: Date.now(),
+      version: '2.0.0-advanced'
+    }
+    return JSON.stringify(exportData, null, 2)
   }
 } 
