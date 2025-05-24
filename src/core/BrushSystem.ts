@@ -308,8 +308,8 @@ export class BrushSystem {
             break
         }
 
-        // Clamp height values to reasonable bounds
-        this.heightData[index] = Math.max(-200, Math.min(800, this.heightData[index]))
+        // Clamp height values to reasonable bounds - greatly increased range
+        this.heightData[index] = Math.max(-2000, Math.min(5000, this.heightData[index]))
       }
     }
   }
@@ -320,235 +320,41 @@ export class BrushSystem {
     const preset = this.brushSettings.mountainPreset
     const normalizedDistance = distance / brushRadius
 
-    // World coordinates for consistent terrain features
-    const worldX = (x + centerX * 0.1) * 0.1
-    const worldZ = (z + centerZ * 0.1) * 0.1
+    // Convert to world coordinates for consistent noise
+    const worldX = (x / this.resolution) * 2.0 - 1.0
+    const worldZ = (z / this.resolution) * 2.0 - 1.0
 
-    // === GEOLOGICAL LAYER SYSTEM ===
-    
-    // 1. BASE ELEVATION - Foundation layer
-    const baseElevation = this.generateBaseElevation(worldX, worldZ, preset)
-    
-    // 2. RIDGE NETWORK - Primary structural features
-    const ridgeSystem = this.generateRidgeNetwork(worldX, worldZ, preset, normalizedDistance)
-    
-    // 3. SECONDARY FEATURES - Peaks, valleys, plateaus
-    const secondaryFeatures = this.generateSecondaryFeatures(worldX, worldZ, preset, normalizedDistance)
-    
-    // 4. EROSION AND WEATHERING - Natural breakdown patterns
-    const erosionEffects = this.generateErosionPatterns(worldX, worldZ, preset, normalizedDistance)
-    
-    // === MOUNTAIN TYPE SPECIFIC ASSEMBLY ===
-    let finalHeight = 0
-
-    if (preset.type === 'alpine') {
-      // Alpine: Dramatic ridges, sharp peaks, steep faces
-      finalHeight = baseElevation * 0.6 + ridgeSystem * 1.2 + secondaryFeatures * 0.8
-      
-      // Alpine sharpening - create knife-edge ridges
-      const sharpening = Math.pow(finalHeight / (preset.strength * 40), 1 / preset.ridgeSharpness)
-      finalHeight = sharpening * preset.strength * 40
-      
-      // Add alpine-specific features
-      finalHeight += this.generateAlpineFeatures(worldX, worldZ, preset, normalizedDistance)
-      
-      // Apply minimal erosion (alpine mountains are young/active)
-      finalHeight -= erosionEffects * 0.3
-      
-    } else if (preset.type === 'desert') {
-      // Desert: Mesas, canyons, stratified layers, heavy erosion
-      finalHeight = baseElevation * 0.8 + ridgeSystem * 0.6 + secondaryFeatures * 1.0
-      
-      // Apply plateau formation and stratification
-      finalHeight = this.createMesaFormations(finalHeight, worldX, worldZ, preset)
-      
-      // Add desert-specific features
-      finalHeight += this.generateDesertFeatures(worldX, worldZ, preset, normalizedDistance)
-      
-      // Apply heavy erosion (desert mountains are old/weathered)
-      finalHeight -= erosionEffects * 0.8
-      
-      // Create canyon systems
-      finalHeight = this.carveCanyonSystems(finalHeight, worldX, worldZ, preset, normalizedDistance)
-    }
-
-    // Ensure minimum height and natural falloff
-    return this.applyAdvancedFalloff(finalHeight, normalizedDistance, worldX, worldZ, preset)
-  }
-
-  private generateBaseElevation(worldX: number, worldZ: number, preset: MountainPreset): number {
-    // Multi-octave noise for realistic base terrain
-    let elevation = 0
-    let amplitude = preset.strength * 25
+    // Base mountain height using multiple noise layers
+    let mountainHeight = 0
+    let amplitude = preset.strength * 60
     let frequency = preset.frequency
-    let maxValue = 0
 
     for (let i = 0; i < preset.octaves; i++) {
-      const noiseX = worldX * frequency
-      const noiseZ = worldZ * frequency
+      // Use proper sine/cosine noise for mountain generation
+      const nx = worldX * frequency * 10
+      const nz = worldZ * frequency * 10
       
-      // Improved noise function using multiple sine/cosine combinations
-      const n1 = Math.sin(noiseX * Math.PI * 2.1) * Math.cos(noiseZ * Math.PI * 1.7)
-      const n2 = Math.sin(noiseX * Math.PI * 1.3) * Math.cos(noiseZ * Math.PI * 2.3)
-      const n3 = Math.sin(noiseX * Math.PI * 3.7) * Math.cos(noiseZ * Math.PI * 0.9)
+      let noise = 0
+      if (preset.type === 'alpine') {
+        // Sharp alpine ridges
+        const ridge1 = Math.abs(Math.sin(nx) * Math.cos(nz * 0.7))
+        const ridge2 = Math.abs(Math.cos(nx * 1.3) * Math.sin(nz * 1.1))
+        noise = Math.pow(1.0 - (ridge1 + ridge2) * 0.5, preset.ridgeSharpness)
+      } else {
+        // Desert mesa formations
+        const base = Math.sin(nx) * Math.cos(nz) + Math.cos(nx * 0.7) * Math.sin(nz * 1.2)
+        noise = Math.abs(base)
+      }
       
-      const noise = (n1 + n2 * 0.7 + n3 * 0.4) / 2.1
-      
-      elevation += Math.abs(noise) * amplitude
-      maxValue += amplitude
+      mountainHeight += noise * amplitude
       amplitude *= preset.persistence
-      frequency *= 2.2
+      frequency *= 2.0
     }
 
-    return (elevation / maxValue) * preset.strength * 30
-  }
-
-  private generateRidgeNetwork(worldX: number, worldZ: number, preset: MountainPreset, normalizedDistance: number): number {
-    // Create interconnected ridge systems
-    const ridge1 = Math.sin(worldX * 1.2) * Math.cos(worldZ * 0.8)
-    const ridge2 = Math.cos(worldX * 0.9) * Math.sin(worldZ * 1.1)
-    const ridge3 = Math.sin(worldX * 1.7 + worldZ * 0.6) * Math.cos(worldX * 0.5 + worldZ * 1.3)
+    // Apply smooth distance falloff
+    const falloff = Math.pow(1.0 - Math.min(1.0, normalizedDistance), 2.0)
     
-    // Combine ridges with varying strengths
-    const primaryRidge = Math.abs(ridge1 + ridge2 * 0.6) * 20
-    const secondaryRidge = Math.abs(ridge3) * 12
-    
-    // Ridge intensity falls off with distance but creates natural networks
-    const ridgeIntensity = 1 - normalizedDistance * 0.4
-    
-    return (primaryRidge + secondaryRidge) * ridgeIntensity
-  }
-
-  private generateSecondaryFeatures(worldX: number, worldZ: number, preset: MountainPreset, normalizedDistance: number): number {
-    // Peak clusters and valley systems
-    const peakNoise = Math.sin(worldX * 2.3) * Math.cos(worldZ * 1.9)
-    const valleyNoise = Math.cos(worldX * 1.6) * Math.sin(worldZ * 2.1)
-    
-    // Create peak emphasis in certain areas
-    let features = 0
-    if (Math.abs(peakNoise) > 0.4) {
-      features += Math.abs(peakNoise) * 15 * (1 - normalizedDistance * 0.5)
-    }
-    
-    // Create valley depressions
-    if (Math.abs(valleyNoise) > 0.5) {
-      features -= Math.abs(valleyNoise) * 8 * (1 - normalizedDistance * 0.3)
-    }
-    
-    return features
-  }
-
-  private generateErosionPatterns(worldX: number, worldZ: number, preset: MountainPreset, normalizedDistance: number): number {
-    // Simulate natural erosion patterns
-    const waterErosion = Math.sin(worldX * 3.1) * Math.cos(worldZ * 2.7) * 6
-    const windErosion = Math.cos(worldX * 4.2) * Math.sin(worldZ * 3.8) * 4
-    const weathering = Math.sin(worldX * 5.5 + worldZ * 4.1) * 3
-    
-    return Math.abs(waterErosion + windErosion + weathering) * (1 - normalizedDistance * 0.6)
-  }
-
-  private generateAlpineFeatures(worldX: number, worldZ: number, preset: MountainPreset, normalizedDistance: number): number {
-    let alpineFeatures = 0
-    
-    // Cirques and glacial valleys
-    const cirquePattern = Math.sin(worldX * 1.8) * Math.cos(worldZ * 1.5)
-    if (Math.abs(cirquePattern) > 0.6) {
-      alpineFeatures += Math.abs(cirquePattern) * 12 * (1 - normalizedDistance * 0.4)
-    }
-    
-    // Arêtes (sharp ridges between cirques)
-    const aretePattern = Math.abs(Math.sin(worldX * 2.4) + Math.cos(worldZ * 2.1))
-    if (aretePattern > 1.3) {
-      alpineFeatures += (aretePattern - 1.3) * 18 * (1 - normalizedDistance * 0.3)
-    }
-    
-    // Horns (pyramid peaks)
-    const hornPattern = Math.sin(worldX * 1.1) * Math.cos(worldZ * 1.3) * Math.sin(worldX * 2.9)
-    if (Math.abs(hornPattern) > 0.7) {
-      alpineFeatures += Math.abs(hornPattern) * 25 * (1 - normalizedDistance * 0.2)
-    }
-    
-    return alpineFeatures
-  }
-
-  private generateDesertFeatures(worldX: number, worldZ: number, preset: MountainPreset, normalizedDistance: number): number {
-    let desertFeatures = 0
-    
-    // Buttes and spires
-    const buttePattern = Math.sin(worldX * 3.2) * Math.cos(worldZ * 2.8)
-    if (Math.abs(buttePattern) > 0.8) {
-      desertFeatures += Math.abs(buttePattern) * 16 * (1 - normalizedDistance * 0.5)
-    }
-    
-    // Hoodoos (rock pillars)
-    const hoodooPattern = Math.sin(worldX * 6.1) * Math.cos(worldZ * 5.7)
-    if (Math.abs(hoodooPattern) > 0.9) {
-      desertFeatures += Math.abs(hoodooPattern) * 8 * (1 - normalizedDistance * 0.7)
-    }
-    
-    return desertFeatures
-  }
-
-  private createMesaFormations(height: number, worldX: number, worldZ: number, preset: MountainPreset): number {
-    // Create stepped mesa formations with natural variation
-    const stepSize = preset.strength * 12
-    const steps = Math.floor(height / stepSize)
-    
-    if (steps > 0) {
-      const baseHeight = steps * stepSize
-      const capHeight = (height - baseHeight) * 0.3 // Reduce cap rock height
-      
-      // Add natural variation to mesa edges
-      const edgeVariation = Math.sin(worldX * 4.5) * Math.cos(worldZ * 3.9) * 2
-      
-      return baseHeight + capHeight + edgeVariation
-    }
-    
-    return height
-  }
-
-  private carveCanyonSystems(height: number, worldX: number, worldZ: number, preset: MountainPreset, normalizedDistance: number): number {
-    // Create realistic canyon systems
-    const canyonX = Math.sin(worldX * 0.7) * Math.cos(worldZ * 0.5)
-    const canyonZ = Math.cos(worldX * 0.5) * Math.sin(worldZ * 0.8)
-    
-    // Main canyon channel
-    const mainCanyon = Math.abs(canyonX + canyonZ * 0.7)
-    
-    // Tributary canyons
-    const tributary1 = Math.abs(Math.sin(worldX * 1.2) * Math.cos(worldZ * 0.9))
-    const tributary2 = Math.abs(Math.cos(worldX * 0.8) * Math.sin(worldZ * 1.4))
-    
-    // Canyon depth varies with terrain height and distance
-    const canyonDepth = (mainCanyon * 0.4 + tributary1 * 0.2 + tributary2 * 0.2) * height * 0.3
-    
-    // Only carve canyons in specific patterns
-    const canyonPattern = Math.sin(worldX * 1.1) * Math.cos(worldZ * 0.9)
-    if (Math.abs(canyonPattern) > 0.3) {
-      return Math.max(height - canyonDepth, height * 0.4)
-    }
-    
-    return height
-  }
-
-  private applyAdvancedFalloff(height: number, normalizedDistance: number, worldX: number, worldZ: number, preset: MountainPreset): number {
-    // Natural mountain base falloff with geological variation
-    let falloff = 1 - normalizedDistance
-    falloff = Math.pow(falloff, 1.3) // More realistic mountain slope
-    
-    // Add natural irregularity to mountain edges
-    const edgeVariation = Math.sin(worldX * 2.8) * Math.cos(worldZ * 3.1) * 0.1
-    falloff += edgeVariation * (1 - normalizedDistance)
-    falloff = Math.max(0, Math.min(1, falloff))
-    
-    // Apply foothills effect - gradual elevation change
-    const foothillsFactor = Math.max(0.1, falloff)
-    
-    // Ensure positive height with natural minimum
-    const finalHeight = Math.max(height * falloff, height * foothillsFactor * 0.1)
-    
-    // Scale to appropriate size for terrain
-    return Math.max(0, finalHeight * 0.8) // Overall scaling factor
+    return mountainHeight * falloff
   }
 
   private getSmoothedHeight(x: number, z: number): number {

@@ -19,9 +19,9 @@ export class UIController {
     
     // Terrain generation controls
     const terrainSizeSlider = document.getElementById('terrainSize') as HTMLInputElement
-    const noiseScaleSlider = document.getElementById('noiseScale') as HTMLInputElement
-    const amplitudeSlider = document.getElementById('amplitude') as HTMLInputElement
-    const octavesSlider = document.getElementById('octaves') as HTMLInputElement
+    const heightScaleSlider = document.getElementById('heightScale') as HTMLInputElement
+    const mountainIntensitySlider = document.getElementById('mountainIntensity') as HTMLInputElement
+    const valleyDepthSlider = document.getElementById('valleyDepth') as HTMLInputElement
     const seedInput = document.getElementById('seed') as HTMLInputElement
     const randomizeSeedBtn = document.getElementById('randomizeSeed') as HTMLButtonElement
 
@@ -31,22 +31,22 @@ export class UIController {
       this.updateValueDisplay('terrainSizeValue', `${value} km`)
     })
 
-    noiseScaleSlider.addEventListener('input', () => {
-      const value = parseFloat(noiseScaleSlider.value)
-      this.terrainBuilder.updateConfig({ noiseScale: value })
-      this.updateValueDisplay('noiseScaleValue', value.toFixed(3))
+    heightScaleSlider.addEventListener('input', () => {
+      const value = parseFloat(heightScaleSlider.value)
+      this.terrainBuilder.updateConfig({ heightScale: value })
+      this.updateValueDisplay('heightScaleValue', `${value}x`)
     })
 
-    amplitudeSlider.addEventListener('input', () => {
-      const value = parseFloat(amplitudeSlider.value)
-      this.terrainBuilder.updateConfig({ amplitude: value })
-      this.updateValueDisplay('amplitudeValue', `${value}m`)
+    mountainIntensitySlider.addEventListener('input', () => {
+      const value = parseFloat(mountainIntensitySlider.value)
+      this.terrainBuilder.updateConfig({ mountainIntensity: value })
+      this.updateValueDisplay('mountainIntensityValue', value.toFixed(1))
     })
 
-    octavesSlider.addEventListener('input', () => {
-      const value = parseInt(octavesSlider.value)
-      this.terrainBuilder.updateConfig({ octaves: value })
-      this.updateValueDisplay('octavesValue', value.toString())
+    valleyDepthSlider.addEventListener('input', () => {
+      const value = parseFloat(valleyDepthSlider.value)
+      this.terrainBuilder.updateConfig({ valleyDepth: value })
+      this.updateValueDisplay('valleyDepthValue', value.toFixed(1))
     })
 
     seedInput.addEventListener('input', () => {
@@ -62,6 +62,28 @@ export class UIController {
       const newSeed = this.terrainBuilder.getConfig().seed
       seedInput.value = newSeed.toString()
       this.updateValueDisplay('seedValue', newSeed.toString())
+    })
+
+    // Terrain preset controls
+    const alpinePresetBtn = document.getElementById('alpinePreset') as HTMLButtonElement
+    const islandPresetBtn = document.getElementById('islandPreset') as HTMLButtonElement
+    const desertPresetBtn = document.getElementById('desertPreset') as HTMLButtonElement
+    const continentalPresetBtn = document.getElementById('continentalPreset') as HTMLButtonElement
+
+    alpinePresetBtn.addEventListener('click', () => {
+      this.applyTerrainPreset('alpine')
+    })
+
+    islandPresetBtn.addEventListener('click', () => {
+      this.applyTerrainPreset('island')
+    })
+
+    desertPresetBtn.addEventListener('click', () => {
+      this.applyTerrainPreset('desert')
+    })
+
+    continentalPresetBtn.addEventListener('click', () => {
+      this.applyTerrainPreset('continental')
     })
 
     // Brush controls
@@ -93,14 +115,14 @@ export class UIController {
 
     // Mountain preset controls
     const alaskanPresetBtn = document.getElementById('alaskanPreset') as HTMLButtonElement
-    const desertPresetBtn = document.getElementById('desertPreset') as HTMLButtonElement
+    const desertMountainPresetBtn = document.getElementById('desertMountainPreset') as HTMLButtonElement
 
     alaskanPresetBtn.addEventListener('click', () => {
       this.terrainBuilder.getBrushSystem().applyMountainPreset('alaskan')
       this.updateBrushUI()
     })
 
-    desertPresetBtn.addEventListener('click', () => {
+    desertMountainPresetBtn.addEventListener('click', () => {
       this.terrainBuilder.getBrushSystem().applyMountainPreset('desert')
       this.updateBrushUI()
     })
@@ -342,9 +364,9 @@ export class UIController {
     
     // Update terrain generation controls
     const terrainSizeSlider = document.getElementById('terrainSize') as HTMLInputElement
-    const noiseScaleSlider = document.getElementById('noiseScale') as HTMLInputElement
-    const amplitudeSlider = document.getElementById('amplitude') as HTMLInputElement
-    const octavesSlider = document.getElementById('octaves') as HTMLInputElement
+    const heightScaleSlider = document.getElementById('heightScale') as HTMLInputElement
+    const mountainIntensitySlider = document.getElementById('mountainIntensity') as HTMLInputElement
+    const valleyDepthSlider = document.getElementById('valleyDepth') as HTMLInputElement
     const seedInput = document.getElementById('seed') as HTMLInputElement
     const gridToggle = document.getElementById('gridToggle') as HTMLInputElement
 
@@ -353,19 +375,19 @@ export class UIController {
       this.updateValueDisplay('terrainSizeValue', `${config.size} km`)
     }
 
-    if (noiseScaleSlider) {
-      noiseScaleSlider.value = config.noiseScale.toString()
-      this.updateValueDisplay('noiseScaleValue', config.noiseScale.toFixed(3))
+    if (heightScaleSlider) {
+      heightScaleSlider.value = config.heightScale.toString()
+      this.updateValueDisplay('heightScaleValue', `${config.heightScale}x`)
     }
 
-    if (amplitudeSlider) {
-      amplitudeSlider.value = config.amplitude.toString()
-      this.updateValueDisplay('amplitudeValue', `${config.amplitude}m`)
+    if (mountainIntensitySlider) {
+      mountainIntensitySlider.value = config.mountainIntensity.toString()
+      this.updateValueDisplay('mountainIntensityValue', config.mountainIntensity.toFixed(1))
     }
 
-    if (octavesSlider) {
-      octavesSlider.value = config.octaves.toString()
-      this.updateValueDisplay('octavesValue', config.octaves.toString())
+    if (valleyDepthSlider) {
+      valleyDepthSlider.value = config.valleyDepth.toString()
+      this.updateValueDisplay('valleyDepthValue', config.valleyDepth.toFixed(1))
     }
 
     if (seedInput) {
@@ -414,5 +436,52 @@ export class UIController {
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
+  }
+
+  private applyTerrainPreset(presetType: string): void {
+    switch (presetType) {
+      case 'alpine':
+        this.terrainBuilder.updateConfig({
+          terrainType: 'mountain_range' as any,
+          heightScale: 2.5,
+          mountainIntensity: 1.8,
+          valleyDepth: 1.2,
+          size: 8
+        })
+        break
+      case 'island':
+        this.terrainBuilder.updateConfig({
+          terrainType: 'island_chain' as any,
+          heightScale: 1.2,
+          mountainIntensity: 1.0,
+          valleyDepth: 0.3,
+          size: 6
+        })
+        break
+      case 'desert':
+        this.terrainBuilder.updateConfig({
+          terrainType: 'canyon' as any,
+          heightScale: 1.5,
+          mountainIntensity: 0.4,
+          valleyDepth: 1.8,
+          size: 10
+        })
+        break
+      case 'continental':
+        this.terrainBuilder.updateConfig({
+          terrainType: 'continental' as any,
+          heightScale: 1.0,
+          mountainIntensity: 0.8,
+          valleyDepth: 0.5,
+          size: 5
+        })
+        break
+    }
+    
+    // Update UI to reflect new settings
+    this.updateUI()
+    
+    // Regenerate terrain with new preset
+    this.terrainBuilder.generateTerrain()
   }
 } 

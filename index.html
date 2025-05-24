@@ -199,6 +199,20 @@
             grid-template-columns: 1fr 1fr;
             gap: 4px;
         }
+        
+        .terrain-preset {
+            background: #1a472a !important;
+            border: 1px solid #2d5a3d !important;
+            margin-bottom: 4px;
+        }
+        
+        .terrain-preset:hover {
+            background: #2d5a3d !important;
+        }
+        
+        .terrain-preset:active {
+            background: #16401f !important;
+        }
     </style>
 </head>
 <body>
@@ -221,21 +235,21 @@
                 </div>
                 
                 <div class="control-item">
-                    <label>Noise Scale</label>
-                    <input type="range" id="noiseScale" min="0.001" max="0.1" value="0.02" step="0.001">
-                    <div class="value-display" id="noiseScaleValue">0.020</div>
+                    <label>Height Scale</label>
+                    <input type="range" id="heightScale" min="0.2" max="3.0" value="1.0" step="0.1">
+                    <div class="value-display" id="heightScaleValue">1.0x</div>
                 </div>
                 
                 <div class="control-item">
-                    <label>Amplitude</label>
-                    <input type="range" id="amplitude" min="0" max="200" value="50" step="5">
-                    <div class="value-display" id="amplitudeValue">50m</div>
+                    <label>Mountain Intensity</label>
+                    <input type="range" id="mountainIntensity" min="0.0" max="2.0" value="0.8" step="0.1">
+                    <div class="value-display" id="mountainIntensityValue">0.8</div>
                 </div>
                 
                 <div class="control-item">
-                    <label>Octaves</label>
-                    <input type="range" id="octaves" min="1" max="8" value="4" step="1">
-                    <div class="value-display" id="octavesValue">4</div>
+                    <label>Valley Depth</label>
+                    <input type="range" id="valleyDepth" min="0.0" max="2.0" value="0.5" step="0.1">
+                    <div class="value-display" id="valleyDepthValue">0.5</div>
                 </div>
                 
                 <div class="control-item">
@@ -252,6 +266,30 @@
                         <input type="checkbox" id="gridToggle" checked style="margin-right: 6px;">
                         Show Grid
                     </label>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <h3>Terrain Presets</h3>
+                
+                <div class="control-item">
+                    <button id="alpinePreset" class="terrain-preset">🏔️ Alpine Mountains</button>
+                </div>
+                
+                <div class="control-item">
+                    <button id="islandPreset" class="terrain-preset">🏝️ Tropical Islands</button>
+                </div>
+                
+                <div class="control-item">
+                    <button id="desertPreset" class="terrain-preset">🏜️ Desert Canyons</button>
+                </div>
+                
+                <div class="control-item">
+                    <button id="continentalPreset" class="terrain-preset">🌍 Continental</button>
+                </div>
+                
+                <div class="control-item" style="font-size: 11px; color: #aaa; line-height: 1.4;">
+                    Complete terrain configurations with proper settings for realistic landscapes.
                 </div>
             </div>
             
@@ -287,7 +325,7 @@
                 </div>
                 
                 <div class="control-item">
-                    <button id="desertPreset" class="mountain-preset">🏜️ Nevada/New Mexico</button>
+                    <button id="desertMountainPreset" class="mountain-preset">🏜️ Nevada/New Mexico</button>
                 </div>
                 
                 <div class="control-item" style="font-size: 11px; color: #aaa; line-height: 1.4;">

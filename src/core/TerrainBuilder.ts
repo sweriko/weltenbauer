@@ -1,6 +1,8 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three-stdlib'
 import { TerrainGenerator } from './TerrainGenerator'
+import { AdvancedTerrainGenerator, TerrainType } from './AdvancedTerrainGenerator'
+import { TerrainPresets } from './TerrainPresets'
 import { BrushSystem } from './BrushSystem'
 import { ErosionSystem, ErosionConfig } from './ErosionSystem'
 import { AdvancedErosionSystem, AdvancedErosionConfig } from './AdvancedErosionSystem'
@@ -8,10 +10,15 @@ import { AdvancedErosionSystem, AdvancedErosionConfig } from './AdvancedErosionS
 export interface TerrainConfig {
   size: number // Size in kilometers
   resolution: number // Vertices per side
-  noiseScale: number
-  amplitude: number
-  octaves: number
   seed: number
+  // New terrain controls
+  heightScale: number
+  mountainIntensity: number
+  valleyDepth: number
+  terrainType: TerrainType
+  // Advanced mode settings
+  advancedMode: boolean
+  presetName?: string
 }
 
 export type EditorMode = 'orbit' | 'brush'
@@ -25,6 +32,7 @@ export class TerrainBuilder {
   
   private terrain: THREE.Mesh | null = null
   private terrainGenerator: TerrainGenerator
+  private advancedTerrainGenerator: AdvancedTerrainGenerator
   private brushSystem: BrushSystem
   private erosionSystem: ErosionSystem
   private advancedErosionSystem: AdvancedErosionSystem
@@ -36,11 +44,17 @@ export class TerrainBuilder {
   private config: TerrainConfig = {
     size: 5, // 5km
     resolution: 256, // Reduced for better performance
-    noiseScale: 0.02,
-    amplitude: 50,
-    octaves: 4,
-    seed: Math.floor(Math.random() * 1000000)
+    seed: Math.floor(Math.random() * 1000000),
+    // New terrain controls
+    heightScale: 1.0,
+    mountainIntensity: 0.8,
+    valleyDepth: 0.5,
+    terrainType: TerrainType.CONTINENTAL,
+    // Advanced mode settings
+    advancedMode: true
   }
+
+  private updateTimeout: number | null = null
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas
@@ -60,6 +74,11 @@ export class TerrainBuilder {
     
     this.controls = new OrbitControls(this.camera, this.canvas)
     this.terrainGenerator = new TerrainGenerator(this.config.seed)
+    this.advancedTerrainGenerator = new AdvancedTerrainGenerator({
+      size: this.config.size,
+      resolution: this.config.resolution,
+      seed: this.config.seed
+    })
     this.brushSystem = new BrushSystem()
     this.erosionSystem = new ErosionSystem()
     this.advancedErosionSystem = new AdvancedErosionSystem()
@@ -168,40 +187,51 @@ export class TerrainBuilder {
     const imageData = ctx.createImageData(150, 150)
     const data = imageData.data
 
-    // Generate noise for preview
-    for (let y = 0; y < 150; y++) {
-      for (let x = 0; x < 150; x++) {
-        const nx = (x - 75) / 75  // Scale to [-1, 1]
-        const ny = (y - 75) / 75  // Scale to [-1, 1]
-        
-        let height = 0
-        let frequency = this.config.noiseScale
-        let maxValue = 0
-        
-        for (let i = 0; i < this.config.octaves; i++) {
-          const octaveAmplitude = Math.pow(0.5, i)
-          // Use same improved scaling as terrain generation
-          const noiseValue = this.terrainGenerator.sampleNoise(nx * frequency * 8 + i * 100, ny * frequency * 8 + i * 137)
-          height += noiseValue * octaveAmplitude
-          maxValue += octaveAmplitude
-          frequency *= 2
+    // If we have terrain data, sample from it directly for accurate preview
+    if (this.terrain && this.brushSystem.getHeightData) {
+      const heightData = this.brushSystem.getHeightData()
+      const sourceRes = this.config.resolution
+      const scale = sourceRes / 150
+      
+      // Find min/max for proper normalization
+      let min = Infinity
+      let max = -Infinity
+      for (let i = 0; i < heightData.length; i++) {
+        min = Math.min(min, heightData[i])
+        max = Math.max(max, heightData[i])
+      }
+      const range = max - min
+      
+      for (let y = 0; y < 150; y++) {
+        for (let x = 0; x < 150; x++) {
+          const sourceX = Math.min(sourceRes - 1, Math.floor(x * scale))
+          const sourceY = Math.min(sourceRes - 1, Math.floor(y * scale))
+          const sourceIndex = sourceY * sourceRes + sourceX
+          
+          const height = heightData[sourceIndex] || 0
+          
+          // Normalize height for display
+          const normalized = range > 0 ? (height - min) / range : 0.5
+          const value = Math.floor(Math.max(0, Math.min(1, normalized)) * 255)
+          
+          const index = (y * 150 + x) * 4
+          data[index] = value
+          data[index + 1] = value
+          data[index + 2] = value
+          data[index + 3] = 255
         }
-        
-        height = (height / maxValue) * this.config.amplitude
-        
-        // Apply island falloff with same parameters as terrain
-        const distance = Math.sqrt(nx * nx + ny * ny)
-        const falloff = Math.max(0, 1 - Math.pow(distance * 0.7, 3))
-        height *= falloff
-        
-        const normalized = Math.max(0, Math.min(1, (height + this.config.amplitude) / (this.config.amplitude * 2)))
-        const value = Math.floor(normalized * 255)
-        
-        const index = (y * 150 + x) * 4
-        data[index] = value
-        data[index + 1] = value
-        data[index + 2] = value
-        data[index + 3] = 255
+      }
+    } else {
+      // Simple fallback preview
+      for (let y = 0; y < 150; y++) {
+        for (let x = 0; x < 150; x++) {
+          const value = Math.floor(Math.random() * 128 + 64) // Random gray pattern
+          const index = (y * 150 + x) * 4
+          data[index] = value
+          data[index + 1] = value
+          data[index + 2] = value
+          data[index + 3] = 255
+        }
       }
     }
     
@@ -209,27 +239,51 @@ export class TerrainBuilder {
   }
 
   public generateTerrain(): void {
-    // Remove existing terrain
+    // Remove existing terrain with proper cleanup
     if (this.terrain) {
       this.scene.remove(this.terrain)
-      this.terrain.geometry.dispose()
+      
+      // Dispose geometry
+      if (this.terrain.geometry) {
+        this.terrain.geometry.dispose()
+      }
+      
+      // Dispose materials
       if (Array.isArray(this.terrain.material)) {
         this.terrain.material.forEach((mat: THREE.Material) => mat.dispose())
-      } else {
+      } else if (this.terrain.material) {
         (this.terrain.material as THREE.Material).dispose()
       }
+      
+      this.terrain = null
     }
 
-    // Update terrain generator seed
-    this.terrainGenerator.setSeed(this.config.seed)
+    let heightData: Float32Array
 
-    // Generate heightmap
-    const heightData = this.terrainGenerator.generateHeightmap(
-      this.config.resolution,
-      this.config.noiseScale,
-      this.config.amplitude,
-      this.config.octaves
-    )
+    if (this.config.advancedMode) {
+      // Use advanced terrain generator
+      this.advancedTerrainGenerator.updateConfig({
+        size: this.config.size,
+        resolution: this.config.resolution,
+        seed: this.config.seed,
+        heightScale: this.config.heightScale,
+        mountainIntensity: this.config.mountainIntensity,
+        valleyDepth: this.config.valleyDepth
+      })
+      
+      // Apply preset if specified
+      if (this.config.presetName) {
+        const preset = TerrainPresets.getPreset(this.config.presetName)
+        if (preset) {
+          this.advancedTerrainGenerator.updateConfig(preset)
+        }
+      }
+      
+      heightData = this.advancedTerrainGenerator.generateTerrain(this.config.terrainType)
+    } else {
+      // Basic mode not supported anymore - use advanced with default settings
+      heightData = this.advancedTerrainGenerator.generateTerrain(this.config.terrainType)
+    }
 
     // Create terrain geometry
     const geometry = new THREE.PlaneGeometry(
@@ -273,8 +327,19 @@ export class TerrainBuilder {
     // Create mesh
     this.terrain = new THREE.Mesh(geometry, material)
     this.terrain.rotation.x = -Math.PI / 2
+    
+    // Center the terrain properly relative to the grid
+    // Calculate the average height to center the terrain vertically
+    const avgHeight = heightData.reduce((sum, h) => sum + h, 0) / heightData.length
+    this.terrain.position.y = -avgHeight * 0.5 // Center terrain around average height
+    
     this.terrain.receiveShadow = true
     this.scene.add(this.terrain)
+
+    // Update grid position to align with terrain center
+    if (this.gridHelper) {
+      this.gridHelper.position.y = -avgHeight * 0.5 - 0.1 // Slightly below terrain center
+    }
 
     // Update brush system
     this.brushSystem.setTerrain(this.terrain, heightData, this.config.resolution)
@@ -282,7 +347,7 @@ export class TerrainBuilder {
     // Force initial color update in brush system
     this.brushSystem.updateTerrainColors()
     
-    // Update noise preview
+    // Update noise preview to match current mode
     this.updateNoisePreview()
   }
 
@@ -304,10 +369,33 @@ export class TerrainBuilder {
   }
 
   public updateConfig(newConfig: Partial<TerrainConfig>): void {
+    // Update config immediately for UI responsiveness
+    const oldConfig = { ...this.config }
     this.config = { ...this.config, ...newConfig }
     
-    // Auto-regenerate terrain when config changes
-    this.generateTerrain()
+    // Update seeds if changed
+    if (newConfig.seed !== undefined && newConfig.seed !== oldConfig.seed) {
+      this.terrainGenerator.setSeed(newConfig.seed)
+      this.advancedTerrainGenerator.setSeed(newConfig.seed)
+    }
+    
+    // Clear existing timeout
+    if (this.updateTimeout) {
+      clearTimeout(this.updateTimeout)
+    }
+    
+    // Debounce terrain regeneration to avoid excessive updates
+    this.updateTimeout = setTimeout(() => {
+      try {
+        this.generateTerrain()
+      } catch (error) {
+        console.error('Error generating terrain:', error)
+        // Revert to old config on error
+        this.config = oldConfig
+      } finally {
+        this.updateTimeout = null
+      }
+    }, 100) // Reduced to 100ms for more responsive updates
   }
 
   public getConfig(): TerrainConfig {
@@ -352,6 +440,7 @@ export class TerrainBuilder {
   public randomizeSeed(): void {
     this.config.seed = Math.floor(Math.random() * 1000000)
     this.terrainGenerator.setSeed(this.config.seed)
+    this.advancedTerrainGenerator.setSeed(this.config.seed)
     this.generateTerrain()
   }
 
@@ -365,7 +454,30 @@ export class TerrainBuilder {
   }
 
   public dispose(): void {
-    document.body.removeChild(this.noisePreviewCanvas)
+    // Clear any pending update timeouts
+    if (this.updateTimeout) {
+      clearTimeout(this.updateTimeout)
+      this.updateTimeout = null
+    }
+    
+    // Clean up terrain
+    if (this.terrain) {
+      this.scene.remove(this.terrain)
+      if (this.terrain.geometry) {
+        this.terrain.geometry.dispose()
+      }
+      if (Array.isArray(this.terrain.material)) {
+        this.terrain.material.forEach((mat: THREE.Material) => mat.dispose())
+      } else if (this.terrain.material) {
+        (this.terrain.material as THREE.Material).dispose()
+      }
+    }
+    
+    // Clean up preview canvas
+    if (this.noisePreviewCanvas && this.noisePreviewCanvas.parentNode) {
+      document.body.removeChild(this.noisePreviewCanvas)
+    }
+    
     this.controls.dispose()
   }
 
@@ -862,5 +974,57 @@ export class TerrainBuilder {
       g: color1.g + (color2.g - color1.g) * factor,
       b: color1.b + (color2.b - color1.b) * factor
     }
+  }
+
+  // Advanced Terrain Methods
+  public setAdvancedMode(advanced: boolean): void {
+    this.config.advancedMode = advanced
+    this.generateTerrain()
+  }
+
+  public isAdvancedMode(): boolean {
+    return this.config.advancedMode
+  }
+
+  public setTerrainType(type: TerrainType): void {
+    this.config.terrainType = type
+    if (this.config.advancedMode) {
+      this.generateTerrain()
+    }
+  }
+
+  public getTerrainType(): TerrainType {
+    return this.config.terrainType
+  }
+
+  public applyPreset(presetName: string): void {
+    const preset = TerrainPresets.getPreset(presetName)
+    if (preset) {
+      this.config.presetName = presetName
+      this.config.advancedMode = true
+      this.advancedTerrainGenerator.updateConfig(preset)
+      this.updateConfig({
+        size: preset.size,
+        resolution: preset.resolution,
+        seed: preset.seed
+      })
+    }
+  }
+
+  public getAvailablePresets(): string[] {
+    return TerrainPresets.getPresetNames()
+  }
+
+  public getAdvancedTerrainGenerator(): AdvancedTerrainGenerator {
+    return this.advancedTerrainGenerator
+  }
+
+  public exportAdvancedHeightmap(): string {
+    if (this.config.advancedMode && this.terrain) {
+      return this.advancedTerrainGenerator.exportHeightmapAsImage(
+        this.brushSystem.getHeightData()
+      )
+    }
+    return this.exportHeightmap()
   }
 } 

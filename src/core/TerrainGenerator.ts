@@ -16,37 +16,42 @@ export class TerrainGenerator {
     octaves: number
   ): Float32Array {
     const heightData = new Float32Array(resolution * resolution)
-    const halfRes = resolution / 2
 
     for (let y = 0; y < resolution; y++) {
       for (let x = 0; x < resolution; x++) {
         const index = y * resolution + x
         
-        // Normalize coordinates to terrain space
-        const nx = (x - halfRes) / halfRes
-        const ny = (y - halfRes) / halfRes
+        // Improved coordinate transformation to prevent artifacts
+        // Use full range without centering to avoid center-point artifacts
+        const nx = (x / (resolution - 1)) * 2 - 1  // Map to [-1, 1]
+        const ny = (y / (resolution - 1)) * 2 - 1  // Map to [-1, 1]
         
         let height = 0
         let frequency = scale
         let maxValue = 0
         
-        // Generate octaves of noise
+        // Generate octaves of noise with improved scaling
         for (let i = 0; i < octaves; i++) {
           const octaveAmplitude = Math.pow(0.5, i)
-          // Use better scaling to reduce repetition and streaking
-          const noiseValue = this.noise2D(nx * frequency * 8 + i * 100, ny * frequency * 8 + i * 137)
+          
+          // Better offset strategy to prevent line artifacts
+          const offsetX = i * 1000.0  // Large offsets to avoid correlation
+          const offsetY = i * 1731.0  // Prime-like numbers for better distribution
+          
+          const noiseValue = this.noise2D(
+            nx * frequency + offsetX, 
+            ny * frequency + offsetY
+          )
+          
           height += noiseValue * octaveAmplitude
           maxValue += octaveAmplitude
-          frequency *= 2
+          frequency *= 2.0
         }
         
         // Normalize and apply amplitude
         height = (height / maxValue) * amplitude
         
-        // Apply distance-based falloff for island effect (optional)
-        const distance = Math.sqrt(nx * nx + ny * ny)
-        const falloff = Math.max(0, 1 - Math.pow(distance * 0.7, 3)) // Less aggressive falloff
-        height *= falloff
+        // NO distance-based falloff - completely natural terrain
         
         heightData[index] = height
       }
