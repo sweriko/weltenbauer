@@ -611,14 +611,76 @@ export class BrushSystem {
     for (let i = 0; i < this.heightData.length; i++) {
       const normalizedHeight = maxHeight > minHeight ? 
         (this.heightData[i] - minHeight) / (maxHeight - minHeight) : 0.5
-      const grayValue = normalizedHeight * 0.8 + 0.2 // Range from 0.2 to 1.0
+      const color = this.calculateTerrainColor(normalizedHeight, this.heightData[i])
       
-      colors[i * 3] = grayValue     // R
-      colors[i * 3 + 1] = grayValue // G
-      colors[i * 3 + 2] = grayValue // B
+      colors[i * 3] = color.r     // R
+      colors[i * 3 + 1] = color.g // G
+      colors[i * 3 + 2] = color.b // B
     }
 
     geometry.attributes.color.needsUpdate = true
+  }
+
+  private calculateTerrainColor(normalizedHeight: number, height: number): { r: number, g: number, b: number } {
+    // Define terrain height thresholds and colors
+    const soilColor = { r: 0.4, g: 0.3, b: 0.15 }    // Brown soil
+    const grassColor = { r: 0.3, g: 0.6, b: 0.2 }    // Green grass
+    const rockColor = { r: 0.5, g: 0.45, b: 0.4 }    // Gray rock
+    const snowColor = { r: 0.9, g: 0.95, b: 1.0 }    // White snow
+    
+    // Height thresholds (normalized 0-1)
+    const grassStart = 0.1   // Grass starts above soil level
+    const rockStart = 0.6    // Rock starts at higher elevations
+    const snowStart = 0.85   // Snow appears at highest peaks
+    
+    // Transition smoothness
+    const transitionWidth = 0.08
+    
+    let finalColor = { ...soilColor }
+    
+    // Soil to Grass transition
+    if (normalizedHeight > grassStart - transitionWidth) {
+      const grassBlend = this.smoothstep(grassStart - transitionWidth, grassStart + transitionWidth, normalizedHeight)
+      finalColor = this.mixColors(soilColor, grassColor, grassBlend)
+    }
+    
+    // Grass to Rock transition
+    if (normalizedHeight > rockStart - transitionWidth) {
+      const rockBlend = this.smoothstep(rockStart - transitionWidth, rockStart + transitionWidth, normalizedHeight)
+      finalColor = this.mixColors(finalColor, rockColor, rockBlend)
+    }
+    
+    // Rock to Snow transition
+    if (normalizedHeight > snowStart - transitionWidth) {
+      const snowBlend = this.smoothstep(snowStart - transitionWidth, snowStart + transitionWidth, normalizedHeight)
+      finalColor = this.mixColors(finalColor, snowColor, snowBlend)
+    }
+    
+    // Add slight height-based lighting variation
+    const lightingFactor = 0.85 + normalizedHeight * 0.3
+    
+    return {
+      r: Math.min(1.0, finalColor.r * lightingFactor),
+      g: Math.min(1.0, finalColor.g * lightingFactor),
+      b: Math.min(1.0, finalColor.b * lightingFactor)
+    }
+  }
+  
+  private smoothstep(edge0: number, edge1: number, x: number): number {
+    const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)))
+    return t * t * (3 - 2 * t)
+  }
+  
+  private mixColors(
+    color1: { r: number, g: number, b: number }, 
+    color2: { r: number, g: number, b: number }, 
+    factor: number
+  ): { r: number, g: number, b: number } {
+    return {
+      r: color1.r + (color2.r - color1.r) * factor,
+      g: color1.g + (color2.g - color1.g) * factor,
+      b: color1.b + (color2.b - color1.b) * factor
+    }
   }
 
   public update(camera: THREE.Camera): void {
