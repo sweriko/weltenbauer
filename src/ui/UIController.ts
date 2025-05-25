@@ -64,28 +64,6 @@ export class UIController {
       this.updateValueDisplay('seedValue', newSeed.toString())
     })
 
-    // Terrain preset controls
-    const alpinePresetBtn = document.getElementById('alpinePreset') as HTMLButtonElement
-    const islandPresetBtn = document.getElementById('islandPreset') as HTMLButtonElement
-    const desertPresetBtn = document.getElementById('desertPreset') as HTMLButtonElement
-    const continentalPresetBtn = document.getElementById('continentalPreset') as HTMLButtonElement
-
-    alpinePresetBtn.addEventListener('click', () => {
-      this.applyTerrainPreset('alpine')
-    })
-
-    islandPresetBtn.addEventListener('click', () => {
-      this.applyTerrainPreset('island')
-    })
-
-    desertPresetBtn.addEventListener('click', () => {
-      this.applyTerrainPreset('desert')
-    })
-
-    continentalPresetBtn.addEventListener('click', () => {
-      this.applyTerrainPreset('continental')
-    })
-
     // Brush controls
     const brushModes = document.querySelectorAll('.brush-mode')
     const brushSizeSlider = document.getElementById('brushSize') as HTMLInputElement
@@ -245,10 +223,6 @@ export class UIController {
   private setupErosionControls(): void {
     // Erosion preset buttons
     const gentleErosionBtn = document.getElementById('gentleErosion') as HTMLButtonElement
-    const moderateErosionBtn = document.getElementById('moderateErosion') as HTMLButtonElement
-    const intenseErosionBtn = document.getElementById('intenseErosion') as HTMLButtonElement
-    const desertErosionBtn = document.getElementById('desertErosion') as HTMLButtonElement
-    const tropicalErosionBtn = document.getElementById('tropicalErosion') as HTMLButtonElement
 
     // Custom erosion controls
     const erosionIterationsSlider = document.getElementById('erosionIterations') as HTMLInputElement
@@ -263,22 +237,6 @@ export class UIController {
     // Preset erosion buttons
     gentleErosionBtn?.addEventListener('click', () => {
       this.terrainBuilder.applyGentleErosion()
-    })
-
-    moderateErosionBtn?.addEventListener('click', () => {
-      this.terrainBuilder.applyModerateErosion()
-    })
-
-    intenseErosionBtn?.addEventListener('click', () => {
-      this.terrainBuilder.applyIntenseErosion()
-    })
-
-    desertErosionBtn?.addEventListener('click', () => {
-      this.terrainBuilder.applyDesertErosion()
-    })
-
-    tropicalErosionBtn?.addEventListener('click', () => {
-      this.terrainBuilder.applyTropicalErosion()
     })
 
     // Custom erosion sliders
@@ -436,52 +394,5 @@ export class UIController {
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
-  }
-
-  private applyTerrainPreset(presetType: string): void {
-    switch (presetType) {
-      case 'alpine':
-        this.terrainBuilder.updateConfig({
-          terrainType: 'mountain_range' as any,
-          heightScale: 2.5,
-          mountainIntensity: 1.8,
-          valleyDepth: 1.2,
-          size: 8
-        })
-        break
-      case 'island':
-        this.terrainBuilder.updateConfig({
-          terrainType: 'island_chain' as any,
-          heightScale: 1.2,
-          mountainIntensity: 1.0,
-          valleyDepth: 0.3,
-          size: 6
-        })
-        break
-      case 'desert':
-        this.terrainBuilder.updateConfig({
-          terrainType: 'canyon' as any,
-          heightScale: 1.5,
-          mountainIntensity: 0.4,
-          valleyDepth: 1.8,
-          size: 10
-        })
-        break
-      case 'continental':
-        this.terrainBuilder.updateConfig({
-          terrainType: 'continental' as any,
-          heightScale: 1.0,
-          mountainIntensity: 0.8,
-          valleyDepth: 0.5,
-          size: 5
-        })
-        break
-    }
-    
-    // Update UI to reflect new settings
-    this.updateUI()
-    
-    // Regenerate terrain with new preset
-    this.terrainBuilder.generateTerrain()
   }
 } 

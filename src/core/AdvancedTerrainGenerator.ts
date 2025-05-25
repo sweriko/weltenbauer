@@ -528,31 +528,16 @@ export class AdvancedTerrainGenerator {
 
     const range = max - min
 
-    // Convert to grayscale with proper water/land distinction
+    // Convert height data to grayscale image
     for (let i = 0; i < heightData.length; i++) {
-      const height = heightData[i]
-      let r, g, b
-
-      if (height < 0) {
-        // Water - blue tones
-        const depth = Math.abs(height) / Math.abs(min)
-        const intensity = Math.max(0.1, 1 - depth * 0.8)
-        r = Math.floor(intensity * 100)
-        g = Math.floor(intensity * 150)
-        b = Math.floor(intensity * 255)
-      } else {
-        // Land - height-based coloring
-        const normalized = range > 0 ? height / max : 0
-        r = Math.floor(normalized * 255)
-        g = Math.floor(normalized * 200)
-        b = Math.floor(normalized * 150)
-      }
+      const normalized = range > 0 ? (heightData[i] - min) / range : 0
+      const value = Math.floor(normalized * 255)
       
       const pixelIndex = i * 4
-      data[pixelIndex] = r
-      data[pixelIndex + 1] = g
-      data[pixelIndex + 2] = b
-      data[pixelIndex + 3] = 255
+      data[pixelIndex] = value     // Red
+      data[pixelIndex + 1] = value // Green  
+      data[pixelIndex + 2] = value // Blue
+      data[pixelIndex + 3] = 255   // Alpha
     }
 
     ctx.putImageData(imageData, 0, 0)

@@ -1,8 +1,6 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three-stdlib'
-import { TerrainGenerator } from './TerrainGenerator'
 import { AdvancedTerrainGenerator, TerrainType } from './AdvancedTerrainGenerator'
-import { TerrainPresets } from './TerrainPresets'
 import { BrushSystem } from './BrushSystem'
 import { ErosionSystem, ErosionConfig } from './ErosionSystem'
 import { AdvancedErosionSystem, AdvancedErosionConfig } from './AdvancedErosionSystem'
@@ -18,7 +16,6 @@ export interface TerrainConfig {
   terrainType: TerrainType
   // Advanced mode settings
   advancedMode: boolean
-  presetName?: string
 }
 
 export type EditorMode = 'orbit' | 'brush'
@@ -31,7 +28,6 @@ export class TerrainBuilder {
   private controls: OrbitControls
   
   private terrain: THREE.Mesh | null = null
-  private terrainGenerator: TerrainGenerator
   private advancedTerrainGenerator: AdvancedTerrainGenerator
   private brushSystem: BrushSystem
   private erosionSystem: ErosionSystem
@@ -73,7 +69,6 @@ export class TerrainBuilder {
     })
     
     this.controls = new OrbitControls(this.camera, this.canvas)
-    this.terrainGenerator = new TerrainGenerator(this.config.seed)
     this.advancedTerrainGenerator = new AdvancedTerrainGenerator({
       size: this.config.size,
       resolution: this.config.resolution,
@@ -97,15 +92,15 @@ export class TerrainBuilder {
     this.renderer.shadowMap.enabled = true
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
 
-    // Camera setup
-    this.camera.position.set(100, 150, 100)
+    // Camera setup - positioned for bird's eye view of entire terrain
+    this.camera.position.set(0, 800, 600)
     this.camera.lookAt(0, 0, 0)
 
     // Controls setup
     this.controls.enableDamping = true
     this.controls.dampingFactor = 0.05
     this.controls.minDistance = 10
-    this.controls.maxDistance = 1000
+    this.controls.maxDistance = 5000
     this.controls.maxPolarAngle = Math.PI / 2 - 0.1
     this.controls.target.set(0, 0, 0)
 
@@ -171,7 +166,7 @@ export class TerrainBuilder {
     canvas.width = 150
     canvas.height = 150
     canvas.style.position = 'absolute'
-    canvas.style.top = '10px'
+    canvas.style.top = '50px'
     canvas.style.left = '10px'
     canvas.style.border = '2px solid #444'
     canvas.style.borderRadius = '8px'
@@ -271,14 +266,6 @@ export class TerrainBuilder {
         valleyDepth: this.config.valleyDepth
       })
       
-      // Apply preset if specified
-      if (this.config.presetName) {
-        const preset = TerrainPresets.getPreset(this.config.presetName)
-        if (preset) {
-          this.advancedTerrainGenerator.updateConfig(preset)
-        }
-      }
-      
       heightData = this.advancedTerrainGenerator.generateTerrain(this.config.terrainType)
     } else {
       // Basic mode not supported anymore - use advanced with default settings
@@ -375,7 +362,6 @@ export class TerrainBuilder {
     
     // Update seeds if changed
     if (newConfig.seed !== undefined && newConfig.seed !== oldConfig.seed) {
-      this.terrainGenerator.setSeed(newConfig.seed)
       this.advancedTerrainGenerator.setSeed(newConfig.seed)
     }
     
@@ -420,9 +406,8 @@ export class TerrainBuilder {
   }
 
   public exportHeightmap(): string {
-    return this.terrainGenerator.exportHeightmapAsImage(
-      this.brushSystem.getHeightData(),
-      this.config.resolution
+    return this.advancedTerrainGenerator.exportHeightmapAsImage(
+      this.brushSystem.getHeightData()
     )
   }
 
@@ -430,7 +415,7 @@ export class TerrainBuilder {
     const projectData = {
       config: this.config,
       heightData: Array.from(this.brushSystem.getHeightData()),
-      seed: this.terrainGenerator.getSeed(),
+      seed: this.advancedTerrainGenerator.getSeed(),
       timestamp: Date.now(),
       version: '1.0.0'
     }
@@ -439,7 +424,6 @@ export class TerrainBuilder {
 
   public randomizeSeed(): void {
     this.config.seed = Math.floor(Math.random() * 1000000)
-    this.terrainGenerator.setSeed(this.config.seed)
     this.advancedTerrainGenerator.setSeed(this.config.seed)
     this.generateTerrain()
   }
@@ -995,24 +979,6 @@ export class TerrainBuilder {
 
   public getTerrainType(): TerrainType {
     return this.config.terrainType
-  }
-
-  public applyPreset(presetName: string): void {
-    const preset = TerrainPresets.getPreset(presetName)
-    if (preset) {
-      this.config.presetName = presetName
-      this.config.advancedMode = true
-      this.advancedTerrainGenerator.updateConfig(preset)
-      this.updateConfig({
-        size: preset.size,
-        resolution: preset.resolution,
-        seed: preset.seed
-      })
-    }
-  }
-
-  public getAvailablePresets(): string[] {
-    return TerrainPresets.getPresetNames()
   }
 
   public getAdvancedTerrainGenerator(): AdvancedTerrainGenerator {

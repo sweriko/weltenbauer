@@ -199,19 +199,26 @@
             grid-template-columns: 1fr 1fr;
             gap: 4px;
         }
-        
-        .terrain-preset {
-            background: #1a472a !important;
-            border: 1px solid #2d5a3d !important;
-            margin-bottom: 4px;
+
+        #export-panel {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 260px;
+            background: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 16px;
+            z-index: 1000;
         }
-        
-        .terrain-preset:hover {
-            background: #2d5a3d !important;
-        }
-        
-        .terrain-preset:active {
-            background: #16401f !important;
+
+        #export-panel h3 {
+            color: #fff;
+            margin-bottom: 12px;
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
     </style>
 </head>
@@ -270,30 +277,6 @@
             </div>
             
             <div class="control-group">
-                <h3>Terrain Presets</h3>
-                
-                <div class="control-item">
-                    <button id="alpinePreset" class="terrain-preset">🏔️ Alpine Mountains</button>
-                </div>
-                
-                <div class="control-item">
-                    <button id="islandPreset" class="terrain-preset">🏝️ Tropical Islands</button>
-                </div>
-                
-                <div class="control-item">
-                    <button id="desertPreset" class="terrain-preset">🏜️ Desert Canyons</button>
-                </div>
-                
-                <div class="control-item">
-                    <button id="continentalPreset" class="terrain-preset">🌍 Continental</button>
-                </div>
-                
-                <div class="control-item" style="font-size: 11px; color: #aaa; line-height: 1.4;">
-                    Complete terrain configurations with proper settings for realistic landscapes.
-                </div>
-            </div>
-            
-            <div class="control-group">
                 <h3>Brush Tools</h3>
                 
                 <div class="brush-modes">
@@ -341,23 +324,6 @@
                 </div>
                 
                 <div class="control-item">
-                    <button id="moderateErosion" class="erosion-preset">⛈️ Moderate Storm</button>
-                </div>
-                
-                <div class="control-item">
-                    <button id="intenseErosion" class="erosion-preset">🌊 Intense Erosion</button>
-                </div>
-                
-                <div class="erosion-grid">
-                    <div class="control-item">
-                        <button id="desertErosion" class="erosion-preset">🏜️ Desert</button>
-                    </div>
-                    <div class="control-item">
-                        <button id="tropicalErosion" class="erosion-preset">🌴 Tropical</button>
-                    </div>
-                </div>
-                
-                <div class="control-item">
                     <button id="createRiver" class="erosion-preset">🏞️ Create River</button>
                 </div>
             </div>
@@ -398,16 +364,19 @@
                 </div>
             </div>
             
-            <div class="control-group">
-                <h3>Export</h3>
-                
-                <div class="control-item">
-                    <button id="exportHeightmap">Export Heightmap</button>
-                </div>
-                
-                <div class="control-item">
-                    <button id="exportProject">Export Project</button>
-                </div>
+
+        </div>
+        
+        <!-- Independent Export Panel -->
+        <div id="export-panel">
+            <h3>Export</h3>
+            
+            <div class="control-item">
+                <button id="exportHeightmap">Export Heightmap</button>
+            </div>
+            
+            <div class="control-item">
+                <button id="exportProject">Export Project</button>
             </div>
         </div>
     </div>
