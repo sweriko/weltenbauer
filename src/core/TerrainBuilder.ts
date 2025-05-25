@@ -110,6 +110,7 @@ export class TerrainBuilder {
     this.controls.target.set(0, 0, 0)
 
     // Scene setup
+    this.setupSkybox()
     this.setupLights()
     this.setupGrid()
     
@@ -134,24 +135,51 @@ export class TerrainBuilder {
     this.animate()
   }
 
-  private setupLights(): void {
-    // Ambient light
-    const ambientLight = new THREE.AmbientLight(0x404040, 0.4)
-    this.scene.add(ambientLight)
+  private setupSkybox(): void {
+    // Load the skybox texture
+    const textureLoader = new THREE.TextureLoader()
+    const skyboxTexture = textureLoader.load('src/textures/skybox.png', (texture) => {
+      // Set the background texture once it's loaded
+      texture.mapping = THREE.EquirectangularReflectionMapping
+      this.scene.background = texture
+      
+      // Remove environment mapping to prevent skybox from affecting terrain lighting
+      // this.scene.environment = texture
+    })
+  }
 
-    // Directional light (sun)
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8)
-    directionalLight.position.set(100, 200, 50)
-    directionalLight.castShadow = true
-    directionalLight.shadow.mapSize.width = 2048
-    directionalLight.shadow.mapSize.height = 2048
-    directionalLight.shadow.camera.near = 0.5
-    directionalLight.shadow.camera.far = 500
-    directionalLight.shadow.camera.left = -200
-    directionalLight.shadow.camera.right = 200
-    directionalLight.shadow.camera.top = 200
-    directionalLight.shadow.camera.bottom = -200
-    this.scene.add(directionalLight)
+  private setupLights(): void {
+    // Enhanced ambient light for better global illumination
+    const ambientLight = new THREE.AmbientLight(0x404040, 1.0)
+    this.scene.add(ambientLight)
+    
+    // Add hemisphere light for more natural global illumination
+    const hemisphereLight = new THREE.HemisphereLight(
+      0xffffbb, // Sky color
+      0x080820, // Ground color
+      0.7       // Intensity
+    )
+    this.scene.add(hemisphereLight)
+
+    // Primary directional light (sun)
+    const sunLight = new THREE.DirectionalLight(0xffffeb, 1.0)
+    sunLight.position.set(100, 200, 50)
+    sunLight.castShadow = true
+    sunLight.shadow.mapSize.width = 2048
+    sunLight.shadow.mapSize.height = 2048
+    sunLight.shadow.camera.near = 0.5
+    sunLight.shadow.camera.far = 500
+    sunLight.shadow.camera.left = -200
+    sunLight.shadow.camera.right = 200
+    sunLight.shadow.camera.top = 200
+    sunLight.shadow.camera.bottom = -200
+    this.scene.add(sunLight)
+    
+    // Secondary fill light to soften shadows
+    const fillLight = new THREE.DirectionalLight(0xc2d1ff, 0.3)
+    fillLight.position.set(-50, 100, -50)
+    fillLight.castShadow = false
+    this.scene.add(fillLight)
   }
 
   private setupGrid(): void {
