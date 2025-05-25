@@ -397,11 +397,19 @@ export class BrushSystem {
       vertices[i * 3 + 2] = this.heightData[i]
     }
 
-    this.updateTerrainColors()
-
     geometry.attributes.position.needsUpdate = true
-    geometry.attributes.color.needsUpdate = true
     geometry.computeVertexNormals()
+    
+    // Update material height range for texture splatting
+    if (this.terrain.material && 'uniforms' in this.terrain.material) {
+      const minHeight = Math.min(...this.heightData)
+      const maxHeight = Math.max(...this.heightData)
+      const material = this.terrain.material as THREE.ShaderMaterial
+      if (material.uniforms.minHeight && material.uniforms.maxHeight) {
+        material.uniforms.minHeight.value = minHeight
+        material.uniforms.maxHeight.value = maxHeight
+      }
+    }
   }
 
   public updateTerrainColors(): void {

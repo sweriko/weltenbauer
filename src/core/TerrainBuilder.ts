@@ -4,6 +4,7 @@ import { AdvancedTerrainGenerator, TerrainType } from './AdvancedTerrainGenerato
 import { BrushSystem } from './BrushSystem'
 import { ErosionSystem, ErosionConfig } from './ErosionSystem'
 import { AdvancedErosionSystem, AdvancedErosionConfig } from './AdvancedErosionSystem'
+import { TerrainMaterial } from './TerrainMaterial'
 
 export interface TerrainConfig {
   size: number // Size in kilometers
@@ -29,6 +30,7 @@ export class TerrainBuilder {
   private controls: OrbitControls
   
   private terrain: THREE.Mesh | null = null
+  private terrainMaterial: TerrainMaterial
   private advancedTerrainGenerator: AdvancedTerrainGenerator
   private brushSystem: BrushSystem
   private erosionSystem: ErosionSystem
@@ -71,6 +73,7 @@ export class TerrainBuilder {
     })
     
     this.controls = new OrbitControls(this.camera, this.canvas)
+    this.terrainMaterial = new TerrainMaterial()
     this.advancedTerrainGenerator = new AdvancedTerrainGenerator({
       size: this.config.size,
       resolution: this.config.resolution,
@@ -292,27 +295,13 @@ export class TerrainBuilder {
     geometry.attributes.position.needsUpdate = true
     geometry.computeVertexNormals()
 
-    // Create vertex colors for height-based terrain splatting
-    const colors = new Float32Array(vertices.length)
+    // Update height range for terrain material
     const minHeight = Math.min(...heightData)
     const maxHeight = Math.max(...heightData)
-    
-    for (let i = 0; i < heightData.length; i++) {
-      const normalizedHeight = (heightData[i] - minHeight) / (maxHeight - minHeight)
-      const color = this.calculateTerrainColor(normalizedHeight, heightData[i])
-      
-      colors[i * 3] = color.r     // R
-      colors[i * 3 + 1] = color.g // G
-      colors[i * 3 + 2] = color.b // B
-    }
-    
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+    this.terrainMaterial.updateHeightRange(minHeight, maxHeight)
 
-    // Create material with vertex colors
-    const material = new THREE.MeshLambertMaterial({
-      vertexColors: true,
-      wireframe: false
-    })
+    // Get the material
+    const material = this.terrainMaterial.getMaterial()
 
     // Create mesh
     this.terrain = new THREE.Mesh(geometry, material)
@@ -333,9 +322,6 @@ export class TerrainBuilder {
 
     // Update brush system
     this.brushSystem.setTerrain(this.terrain, heightData, this.config.resolution)
-    
-    // Force initial color update in brush system
-    this.brushSystem.updateTerrainColors()
     
     // Update noise preview to match current mode
     this.updateNoisePreview()
@@ -460,6 +446,9 @@ export class TerrainBuilder {
       }
     }
     
+    // Clean up terrain material
+    this.terrainMaterial.dispose()
+    
     // Clean up preview canvas
     if (this.noisePreviewCanvas && this.noisePreviewCanvas.parentNode) {
       document.body.removeChild(this.noisePreviewCanvas)
@@ -502,7 +491,6 @@ export class TerrainBuilder {
     
     // Update brush system with new height data
     this.brushSystem.setTerrain(this.terrain!, erodedHeightData, this.config.resolution)
-    this.brushSystem.updateTerrainColors()
   }
 
   public getErosionSystem(): ErosionSystem {
@@ -540,7 +528,6 @@ export class TerrainBuilder {
     
     // Update brush system
     this.brushSystem.setTerrain(this.terrain!, erodedHeightData, this.config.resolution)
-    this.brushSystem.updateTerrainColors()
   }
 
   public getWaterFlowVisualization(): Float32Array {
@@ -565,21 +552,10 @@ export class TerrainBuilder {
     geometry.attributes.position.needsUpdate = true
     geometry.computeVertexNormals()
 
-    // Update vertex colors based on new heights
-    const colors = geometry.attributes.color.array as Float32Array
+    // Update height range for terrain material
     const minHeight = Math.min(...heightData)
     const maxHeight = Math.max(...heightData)
-    
-    for (let i = 0; i < heightData.length; i++) {
-      const normalizedHeight = (heightData[i] - minHeight) / (maxHeight - minHeight)
-      const color = this.calculateTerrainColor(normalizedHeight, heightData[i])
-      
-      colors[i * 3] = color.r     // R
-      colors[i * 3 + 1] = color.g // G
-      colors[i * 3 + 2] = color.b // B
-    }
-    
-    geometry.attributes.color.needsUpdate = true
+    this.terrainMaterial.updateHeightRange(minHeight, maxHeight)
   }
 
   // Preset erosion configurations
@@ -654,7 +630,6 @@ export class TerrainBuilder {
     
     // Update brush system with new height data
     this.brushSystem.setTerrain(this.terrain!, erodedHeightData, this.config.resolution)
-    this.brushSystem.updateTerrainColors()
   }
 
   public getAdvancedErosionSystem(): AdvancedErosionSystem {
