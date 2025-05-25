@@ -9,10 +9,11 @@ export interface TerrainConfig {
   size: number // Size in kilometers
   resolution: number // Vertices per side
   seed: number
-  // New terrain controls
-  heightScale: number
-  mountainIntensity: number
-  valleyDepth: number
+  // Redesigned advanced terrain controls
+  geologicalComplexity: number // 0.0-2.0: Controls multi-scale noise layering intensity
+  domainWarping: number // 0.0-1.0: Controls natural terrain flow and organic appearance
+  reliefAmplitude: number // 0.2-4.0: Master height scaling with geological context
+  featureScale: number // 0.1-3.0: Controls size/frequency of geological features
   terrainType: TerrainType
   // Advanced mode settings
   advancedMode: boolean
@@ -41,10 +42,11 @@ export class TerrainBuilder {
     size: 5, // 5km
     resolution: 256, // Reduced for better performance
     seed: Math.floor(Math.random() * 1000000),
-    // New terrain controls
-    heightScale: 1.0,
-    mountainIntensity: 0.8,
-    valleyDepth: 0.5,
+    // Redesigned advanced terrain controls
+    geologicalComplexity: 1.0,
+    domainWarping: 0.5,
+    reliefAmplitude: 2.0,
+    featureScale: 1.5,
     terrainType: TerrainType.CONTINENTAL,
     // Advanced mode settings
     advancedMode: true
@@ -261,9 +263,10 @@ export class TerrainBuilder {
         size: this.config.size,
         resolution: this.config.resolution,
         seed: this.config.seed,
-        heightScale: this.config.heightScale,
-        mountainIntensity: this.config.mountainIntensity,
-        valleyDepth: this.config.valleyDepth
+        geologicalComplexity: this.config.geologicalComplexity,
+        domainWarping: this.config.domainWarping,
+        reliefAmplitude: this.config.reliefAmplitude,
+        featureScale: this.config.featureScale
       })
       
       heightData = this.advancedTerrainGenerator.generateTerrain(this.config.terrainType)

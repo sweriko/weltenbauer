@@ -14,7 +14,13 @@ export interface AdvancedTerrainConfig {
   resolution: number
   seed: number
   
-  // New terrain controls
+  // Redesigned advanced terrain controls
+  geologicalComplexity?: number // 0.0-2.0: Controls multi-scale noise layering intensity
+  domainWarping?: number // 0.0-1.0: Controls natural terrain flow and organic appearance  
+  reliefAmplitude?: number // 0.2-4.0: Master height scaling with geological context
+  featureScale?: number // 0.1-3.0: Controls size/frequency of geological features
+  
+  // Legacy terrain controls (deprecated but kept for compatibility)
   heightScale?: number
   mountainIntensity?: number
   valleyDepth?: number
@@ -100,7 +106,13 @@ export class AdvancedTerrainGenerator {
       resolution: 512,
       seed: Date.now(),
       
-      // New terrain controls
+      // Redesigned advanced terrain controls
+      geologicalComplexity: 1.0,
+      domainWarping: 0.5,
+      reliefAmplitude: 2.0,
+      featureScale: 1.5,
+      
+      // Legacy terrain controls (deprecated but kept for compatibility)
       heightScale: 1.0,
       mountainIntensity: 0.8,
       valleyDepth: 0.5,
@@ -156,19 +168,22 @@ export class AdvancedTerrainGenerator {
     const { resolution } = this.config
     const heightData = new Float32Array(resolution * resolution)
     
-    // Get new terrain control parameters
-    const heightScale = this.config.heightScale || 1.0
-    const mountainIntensity = this.config.mountainIntensity || 0.8
-    const valleyDepth = this.config.valleyDepth || 0.5
+    // Get redesigned terrain control parameters with fallbacks to legacy values
+    const geologicalComplexity = this.config.geologicalComplexity ?? (this.config.mountainIntensity || 0.8)
+    const domainWarping = this.config.domainWarping ?? 0.5
+    const reliefAmplitude = this.config.reliefAmplitude ?? (this.config.heightScale || 1.0)
+    const featureScale = this.config.featureScale ?? 1.5
     
-    // Generate base layers based on terrain type
-    const layers = this.getTerrainTypeLayers(type)
+    // Generate base layers based on terrain type and scale them by geological complexity
+    const layers = this.getTerrainTypeLayers(type, geologicalComplexity, featureScale)
     
-    // Update mountain and valley configs based on user controls
+    // Update geological feature configs based on new controls
     const adjustedConfig = { ...this.config }
-    adjustedConfig.mountainRanges.ridgeStrength = mountainIntensity
-    adjustedConfig.valleys.depth *= valleyDepth
-    adjustedConfig.valleys.networkDensity = valleyDepth
+    adjustedConfig.mountainRanges.ridgeStrength = geologicalComplexity * 0.8
+    adjustedConfig.mountainRanges.peakHeight *= reliefAmplitude * 0.5
+    adjustedConfig.valleys.depth *= (this.config.valleyDepth || 0.5) * reliefAmplitude * 0.3
+    adjustedConfig.valleys.networkDensity = geologicalComplexity * 0.6
+    adjustedConfig.plateaus.height *= reliefAmplitude * 0.4
     
     for (let y = 0; y < resolution; y++) {
       for (let x = 0; x < resolution; x++) {
@@ -178,47 +193,57 @@ export class AdvancedTerrainGenerator {
         const nx = (x / (resolution - 1)) * 2 - 1
         const ny = (y / (resolution - 1)) * 2 - 1
         
-        // Domain warping for AAA quality natural terrain
-        const warpStrength = 0.3
-        const warpScale = 0.5
+        // Advanced domain warping controlled by domainWarping parameter
+        const warpStrength = domainWarping * 0.6 // 0.0 to 0.36
+        const warpScale = 0.3 + featureScale * 0.4 // Scale warp frequency with feature scale
         
         const warpX = this.noiseSystem.perlin(nx * warpScale + 100, ny * warpScale + 200) * warpStrength
         const warpY = this.noiseSystem.perlin(nx * warpScale + 300, ny * warpScale + 400) * warpStrength
         
-        const warpedX = nx + warpX
-        const warpedY = ny + warpY
+        // Apply secondary warping for ultra-natural terrain when domain warping is high
+        let warpedX = nx + warpX
+        let warpedY = ny + warpY
         
-        // Generate base terrain using multi-scale composition with warped coordinates
+        if (domainWarping > 0.7) {
+          const secondaryWarp = (domainWarping - 0.7) * 0.3
+          const secondaryScale = warpScale * 2
+          warpedX += this.noiseSystem.perlin(warpedX * secondaryScale + 500, warpedY * secondaryScale + 600) * secondaryWarp
+          warpedY += this.noiseSystem.perlin(warpedX * secondaryScale + 700, warpedY * secondaryScale + 800) * secondaryWarp
+        }
+        
+        // Generate base terrain using multi-scale composition with intelligent layering
         let height = this.noiseSystem.multiScaleNoise(warpedX, warpedY, layers)
         
-        // Apply geological features with warped coordinates for natural look
+        // Apply geological features with new parameter control
         if (adjustedConfig.mountainRanges.enabled) {
-          height += this.generateMountainRanges(warpedX, warpedY) * mountainIntensity
+          height += this.generateMountainRanges(warpedX, warpedY, featureScale) * geologicalComplexity
         }
         
         if (adjustedConfig.valleys.enabled) {
-          height = this.carveValleys(warpedX, warpedY, height, valleyDepth)
+          height = this.carveValleys(warpedX, warpedY, height, geologicalComplexity * 0.7, featureScale)
         }
         
         if (adjustedConfig.plateaus.enabled) {
-          height = this.addPlateaus(warpedX, warpedY, height)
+          height = this.addPlateaus(warpedX, warpedY, height, featureScale)
         }
         
         if (adjustedConfig.coastalFeatures.enabled) {
-          height = this.addCoastalFeatures(warpedX, warpedY, height)
+          height = this.addCoastalFeatures(warpedX, warpedY, height, featureScale)
         }
         
-        // Apply custom layers with warped coordinates
+        // Apply custom layers with intelligent scaling
         for (const layer of adjustedConfig.layers) {
           height = this.applyLayer(warpedX, warpedY, height, layer)
         }
         
-        // Add micro-detail for AAA quality
-        const microDetail = this.noiseSystem.perlin(warpedX * 8, warpedY * 8) * 2
+        // Intelligent micro-detail that scales with geological complexity and feature scale
+        const microDetailFreq = 6 + featureScale * 4 // 6.4 to 18 frequency range
+        const microDetailAmp = (1 + geologicalComplexity) * featureScale * 0.8 // Smarter amplitude scaling
+        const microDetail = this.noiseSystem.perlin(warpedX * microDetailFreq, warpedY * microDetailFreq) * microDetailAmp
         height += microDetail
         
-        // Apply height scaling
-        height *= heightScale
+        // Apply master relief amplitude scaling
+        height *= reliefAmplitude
         
         heightData[index] = height
       }
@@ -227,12 +252,12 @@ export class AdvancedTerrainGenerator {
     return this.postProcess(heightData)
   }
 
-  private getTerrainTypeLayers(type: TerrainType): Array<{ type: NoiseType; config: any; weight: number }> {
+  private getTerrainTypeLayers(type: TerrainType, geologicalComplexity: number, featureScale: number): Array<{ type: NoiseType; config: any; weight: number }> {
     const baseConfig: NoiseConfig = {
-      octaves: 6,
-      frequency: 0.8,
+      octaves: Math.round(6 + geologicalComplexity * 2), // 6-10 octaves based on complexity
+      frequency: 0.8 / featureScale, // Inverse relationship with feature scale
       amplitude: 1.0,
-      persistence: 0.5,
+      persistence: 0.4 + geologicalComplexity * 0.2, // More persistent detail at higher complexity
       lacunarity: 2.0,
       seed: this.config.seed,
       offset: { x: 0, y: 0 }
@@ -240,104 +265,107 @@ export class AdvancedTerrainGenerator {
 
     const fbmConfig: FBMConfig = {
       ...baseConfig,
-      warpStrength: 0.3,
-      warpFrequency: 0.5,
+      warpStrength: 0.2 + geologicalComplexity * 0.2, // More warping with complexity
+      warpFrequency: 0.5 / featureScale,
       turbulence: false
     }
 
     const ridgedConfig: RidgedNoiseConfig = {
       ...baseConfig,
       ridgeOffset: 1.0,
-      gain: 2.0,
+      gain: 1.5 + geologicalComplexity * 0.8, // More dramatic ridges with complexity
       threshold: 0.0
     }
+
+    // Scale amplitudes based on relief amplitude control
+    const amplitudeScale = 1.0 + geologicalComplexity * 0.5
 
     switch (type) {
       case TerrainType.CONTINENTAL:
         return [
           // Base continental shape with rolling hills
-          { type: NoiseType.FBM, config: { ...fbmConfig, frequency: 0.2, amplitude: 120, octaves: 8 }, weight: 0.6 },
-          // Mountain ridges
-          { type: NoiseType.RIDGED, config: { ...ridgedConfig, frequency: 0.4, amplitude: 80, gain: 1.5 }, weight: 0.25 },
-          // Fine detail
-          { type: NoiseType.BILLOW, config: { ...baseConfig, frequency: 2.0, amplitude: 15, octaves: 4 }, weight: 0.15 }
+          { type: NoiseType.FBM, config: { ...fbmConfig, frequency: 0.2 / featureScale, amplitude: 120 * amplitudeScale, octaves: Math.round(8 + geologicalComplexity) }, weight: 0.6 },
+          // Mountain ridges scaled by complexity
+          { type: NoiseType.RIDGED, config: { ...ridgedConfig, frequency: 0.4 / featureScale, amplitude: 80 * amplitudeScale, gain: 1.5 + geologicalComplexity }, weight: 0.25 },
+          // Fine detail that increases with complexity
+          { type: NoiseType.BILLOW, config: { ...baseConfig, frequency: 2.0 / featureScale, amplitude: 15 * (1 + geologicalComplexity * 0.3), octaves: Math.round(4 + geologicalComplexity) }, weight: 0.15 }
         ]
 
       case TerrainType.ISLAND_CHAIN:
         return [
           // Volcanic island cores
-          { type: NoiseType.VORONOI, config: { frequency: 0.15 }, weight: 0.4 },
-          // Island terrain detail
-          { type: NoiseType.FBM, config: { ...fbmConfig, frequency: 0.8, amplitude: 60, warpStrength: 0.5 }, weight: 0.4 },
+          { type: NoiseType.VORONOI, config: { frequency: 0.15 / featureScale }, weight: 0.4 },
+          // Island terrain detail enhanced by complexity
+          { type: NoiseType.FBM, config: { ...fbmConfig, frequency: 0.8 / featureScale, amplitude: 60 * amplitudeScale, warpStrength: 0.3 + geologicalComplexity * 0.3 }, weight: 0.4 },
           // Coastal variation
-          { type: NoiseType.TURBULENCE, config: { ...fbmConfig, frequency: 1.5, amplitude: 20, turbulence: true }, weight: 0.2 }
+          { type: NoiseType.TURBULENCE, config: { ...fbmConfig, frequency: 1.5 / featureScale, amplitude: 20 * (1 + geologicalComplexity * 0.2), turbulence: true }, weight: 0.2 }
         ]
 
       case TerrainType.MOUNTAIN_RANGE:
         return [
-          // Primary mountain ridges
-          { type: NoiseType.RIDGED, config: { ...ridgedConfig, frequency: 0.3, amplitude: 300, gain: 3.0, octaves: 8 }, weight: 0.7 },
+          // Primary mountain ridges enhanced by complexity
+          { type: NoiseType.RIDGED, config: { ...ridgedConfig, frequency: 0.3 / featureScale, amplitude: 300 * amplitudeScale, gain: 2.0 + geologicalComplexity * 2.0, octaves: Math.round(8 + geologicalComplexity) }, weight: 0.7 },
           // Secondary ridges and peaks
-          { type: NoiseType.RIDGED, config: { ...ridgedConfig, frequency: 0.8, amplitude: 150, gain: 2.0 }, weight: 0.2 },
+          { type: NoiseType.RIDGED, config: { ...ridgedConfig, frequency: 0.8 / featureScale, amplitude: 150 * amplitudeScale, gain: 1.5 + geologicalComplexity }, weight: 0.2 },
           // Valley floor detail
-          { type: NoiseType.FBM, config: { ...fbmConfig, frequency: 1.5, amplitude: 30 }, weight: 0.1 }
+          { type: NoiseType.FBM, config: { ...fbmConfig, frequency: 1.5 / featureScale, amplitude: 30 * (1 + geologicalComplexity * 0.2) }, weight: 0.1 }
         ]
 
       case TerrainType.VALLEY_SYSTEM:
         return [
-          // Gentle rolling base
-          { type: NoiseType.FBM, config: { ...fbmConfig, frequency: 0.3, amplitude: 80, warpStrength: 0.4 }, weight: 0.7 },
+          // Gentle rolling base with enhanced warping
+          { type: NoiseType.FBM, config: { ...fbmConfig, frequency: 0.3 / featureScale, amplitude: 80 * amplitudeScale, warpStrength: 0.3 + geologicalComplexity * 0.2 }, weight: 0.7 },
           // Valley cutting patterns
-          { type: NoiseType.BILLOW, config: { ...baseConfig, frequency: 0.6, amplitude: 40, octaves: 6 }, weight: 0.3 }
+          { type: NoiseType.BILLOW, config: { ...baseConfig, frequency: 0.6 / featureScale, amplitude: 40 * amplitudeScale, octaves: Math.round(6 + geologicalComplexity) }, weight: 0.3 }
         ]
 
       case TerrainType.PLATEAU:
         return [
           // Plateau base with sharp edges
-          { type: NoiseType.FBM, config: { ...fbmConfig, frequency: 0.15, amplitude: 200, octaves: 4 }, weight: 0.8 },
-          // Mesa formations
-          { type: NoiseType.RIDGED, config: { ...ridgedConfig, frequency: 0.5, amplitude: 50, ridgeOffset: 0.8 }, weight: 0.2 }
+          { type: NoiseType.FBM, config: { ...fbmConfig, frequency: 0.15 / featureScale, amplitude: 200 * amplitudeScale, octaves: Math.round(4 + geologicalComplexity * 0.5) }, weight: 0.8 },
+          // Mesa formations enhanced by complexity
+          { type: NoiseType.RIDGED, config: { ...ridgedConfig, frequency: 0.5 / featureScale, amplitude: 50 * amplitudeScale, ridgeOffset: 0.8, gain: 1.5 + geologicalComplexity * 0.5 }, weight: 0.2 }
         ]
 
       case TerrainType.VOLCANIC:
         return [
-          // Volcanic peaks and ridges
-          { type: NoiseType.RIDGED, config: { ...ridgedConfig, frequency: 0.4, amplitude: 250, gain: 4.0, octaves: 6 }, weight: 0.6 },
+          // Volcanic peaks and ridges with dramatic complexity scaling
+          { type: NoiseType.RIDGED, config: { ...ridgedConfig, frequency: 0.4 / featureScale, amplitude: 250 * amplitudeScale, gain: 3.0 + geologicalComplexity * 2.0, octaves: Math.round(6 + geologicalComplexity) }, weight: 0.6 },
           // Lava flow patterns
-          { type: NoiseType.VORONOI, config: { frequency: 0.3 }, weight: 0.2 },
-          // Ash and rough terrain
-          { type: NoiseType.TURBULENCE, config: { ...fbmConfig, frequency: 2.0, amplitude: 40, turbulence: true }, weight: 0.2 }
+          { type: NoiseType.VORONOI, config: { frequency: 0.3 / featureScale }, weight: 0.2 },
+          // Ash and rough terrain enhanced by complexity
+          { type: NoiseType.TURBULENCE, config: { ...fbmConfig, frequency: 2.0 / featureScale, amplitude: 40 * (1 + geologicalComplexity * 0.3), turbulence: true }, weight: 0.2 }
         ]
 
       case TerrainType.DESERT:
         return [
-          // Sand dune base
-          { type: NoiseType.FBM, config: { ...fbmConfig, frequency: 0.4, amplitude: 60, warpStrength: 0.6, octaves: 6 }, weight: 0.6 },
+          // Sand dune base with enhanced warping
+          { type: NoiseType.FBM, config: { ...fbmConfig, frequency: 0.4 / featureScale, amplitude: 60 * amplitudeScale, warpStrength: 0.4 + geologicalComplexity * 0.3, octaves: Math.round(6 + geologicalComplexity) }, weight: 0.6 },
           // Rocky outcrops
-          { type: NoiseType.BILLOW, config: { ...baseConfig, frequency: 0.8, amplitude: 30, octaves: 4 }, weight: 0.25 },
+          { type: NoiseType.BILLOW, config: { ...baseConfig, frequency: 0.8 / featureScale, amplitude: 30 * amplitudeScale, octaves: Math.round(4 + geologicalComplexity * 0.5) }, weight: 0.25 },
           // Fine sand detail
-          { type: NoiseType.TURBULENCE, config: { ...fbmConfig, frequency: 3.0, amplitude: 8, turbulence: true }, weight: 0.15 }
+          { type: NoiseType.TURBULENCE, config: { ...fbmConfig, frequency: 3.0 / featureScale, amplitude: 8 * (1 + geologicalComplexity * 0.2), turbulence: true }, weight: 0.15 }
         ]
 
       case TerrainType.GLACIER:
         return [
-          // Glacial valleys (U-shaped)
-          { type: NoiseType.FBM, config: { ...fbmConfig, frequency: 0.2, amplitude: 150, octaves: 6 }, weight: 0.7 },
+          // Glacial valleys (U-shaped) with complexity enhancement
+          { type: NoiseType.FBM, config: { ...fbmConfig, frequency: 0.2 / featureScale, amplitude: 150 * amplitudeScale, octaves: Math.round(6 + geologicalComplexity) }, weight: 0.7 },
           // Moraines and ridges
-          { type: NoiseType.RIDGED, config: { ...ridgedConfig, frequency: 0.6, amplitude: 60, gain: 1.5 }, weight: 0.3 }
+          { type: NoiseType.RIDGED, config: { ...ridgedConfig, frequency: 0.6 / featureScale, amplitude: 60 * amplitudeScale, gain: 1.2 + geologicalComplexity * 0.6 }, weight: 0.3 }
         ]
 
       case TerrainType.CANYON:
         return [
-          // Deep canyon cutting
-          { type: NoiseType.RIDGED, config: { ...ridgedConfig, frequency: 0.3, amplitude: 200, ridgeOffset: 0.3, gain: 2.5 }, weight: 0.8 },
+          // Deep canyon cutting enhanced by complexity
+          { type: NoiseType.RIDGED, config: { ...ridgedConfig, frequency: 0.3 / featureScale, amplitude: 200 * amplitudeScale, ridgeOffset: 0.3, gain: 2.0 + geologicalComplexity * 1.0 }, weight: 0.8 },
           // Canyon floor variation
-          { type: NoiseType.FBM, config: { ...fbmConfig, frequency: 1.0, amplitude: 25 }, weight: 0.2 }
+          { type: NoiseType.FBM, config: { ...fbmConfig, frequency: 1.0 / featureScale, amplitude: 25 * (1 + geologicalComplexity * 0.2) }, weight: 0.2 }
         ]
 
       default:
         return [
-          { type: NoiseType.FBM, config: { ...fbmConfig, amplitude: 100, octaves: 8 }, weight: 1.0 }
+          { type: NoiseType.FBM, config: { ...fbmConfig, amplitude: 100 * amplitudeScale, octaves: Math.round(8 + geologicalComplexity) }, weight: 1.0 }
         ]
     }
   }
@@ -347,14 +375,14 @@ export class AdvancedTerrainGenerator {
     return height
   }
 
-  private generateMountainRanges(x: number, y: number): number {
+  private generateMountainRanges(x: number, y: number, featureScale: number): number {
     const { mountainRanges } = this.config
     let mountainHeight = 0
     
     for (let i = 0; i < mountainRanges.count; i++) {
       const ridgeConfig: RidgedNoiseConfig = {
         octaves: 5,
-        frequency: 0.5 + i * 0.2,
+        frequency: (0.5 + i * 0.2) / featureScale, // Scale frequency by featureScale
         amplitude: mountainRanges.peakHeight,
         persistence: 0.6,
         lacunarity: 2.1,
@@ -372,19 +400,19 @@ export class AdvancedTerrainGenerator {
     return mountainHeight
   }
 
-  private carveValleys(x: number, y: number, height: number, valleyIntensity: number): number {
+  private carveValleys(x: number, y: number, height: number, valleyIntensity: number, featureScale: number): number {
     const { valleys } = this.config
     
-    const valleyMask = this.noiseSystem.generateNoise(x * 0.3, y * 0.3, NoiseType.FBM, {
+    const valleyMask = this.noiseSystem.generateNoise(x * (0.3 / featureScale), y * (0.3 / featureScale), NoiseType.FBM, {
       octaves: 4,
-      frequency: 1.0,
+      frequency: 1.0 / featureScale, // Scale valley network frequency
       amplitude: 1.0,
       persistence: 0.5,
       lacunarity: 2.0,
       seed: this.config.seed + 100,
       offset: { x: 0, y: 0 },
-      warpStrength: 0.2,
-      warpFrequency: 0.5,
+      warpStrength: 0.2 * valleyIntensity, // More warping with higher intensity
+      warpFrequency: 0.5 / featureScale,
       turbulence: false
     } as FBMConfig)
     
@@ -392,16 +420,16 @@ export class AdvancedTerrainGenerator {
     return height - valleyDepth
   }
 
-  private addPlateaus(x: number, y: number, height: number): number {
+  private addPlateaus(x: number, y: number, height: number, featureScale: number): number {
     const { plateaus } = this.config
     
-    const plateauMask = this.noiseSystem.voronoiNoise(x, y, 0.4)
+    const plateauMask = this.noiseSystem.voronoiNoise(x, y, 0.4 / featureScale) // Scale plateau frequency
     const smoothedPlateau = Math.pow(Math.max(0, 0.5 - plateauMask), plateaus.edgeSharpness)
     
     return height + smoothedPlateau * plateaus.height
   }
 
-  private addCoastalFeatures(x: number, y: number, height: number): number {
+  private addCoastalFeatures(x: number, y: number, height: number, featureScale: number): number {
     // Removed distance-based coastal features to eliminate rings
     // Instead use height-based coastal effects
     if (height > -5 && height < 5) {

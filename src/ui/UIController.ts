@@ -19,9 +19,10 @@ export class UIController {
     
     // Terrain generation controls
     const terrainSizeSlider = document.getElementById('terrainSize') as HTMLInputElement
-    const heightScaleSlider = document.getElementById('heightScale') as HTMLInputElement
-    const mountainIntensitySlider = document.getElementById('mountainIntensity') as HTMLInputElement
-    const valleyDepthSlider = document.getElementById('valleyDepth') as HTMLInputElement
+    const geologicalComplexitySlider = document.getElementById('geologicalComplexity') as HTMLInputElement
+    const domainWarpingSlider = document.getElementById('domainWarping') as HTMLInputElement
+    const reliefAmplitudeSlider = document.getElementById('reliefAmplitude') as HTMLInputElement
+    const featureScaleSlider = document.getElementById('featureScale') as HTMLInputElement
     const seedInput = document.getElementById('seed') as HTMLInputElement
     const randomizeSeedBtn = document.getElementById('randomizeSeed') as HTMLButtonElement
 
@@ -31,22 +32,28 @@ export class UIController {
       this.updateValueDisplay('terrainSizeValue', `${value} km`)
     })
 
-    heightScaleSlider.addEventListener('input', () => {
-      const value = parseFloat(heightScaleSlider.value)
-      this.terrainBuilder.updateConfig({ heightScale: value })
-      this.updateValueDisplay('heightScaleValue', `${value}x`)
+    geologicalComplexitySlider.addEventListener('input', () => {
+      const value = parseFloat(geologicalComplexitySlider.value)
+      this.terrainBuilder.updateConfig({ geologicalComplexity: value })
+      this.updateValueDisplay('geologicalComplexityValue', value.toFixed(1))
     })
 
-    mountainIntensitySlider.addEventListener('input', () => {
-      const value = parseFloat(mountainIntensitySlider.value)
-      this.terrainBuilder.updateConfig({ mountainIntensity: value })
-      this.updateValueDisplay('mountainIntensityValue', value.toFixed(1))
+    domainWarpingSlider.addEventListener('input', () => {
+      const value = parseFloat(domainWarpingSlider.value)
+      this.terrainBuilder.updateConfig({ domainWarping: value })
+      this.updateValueDisplay('domainWarpingValue', value.toFixed(2))
     })
 
-    valleyDepthSlider.addEventListener('input', () => {
-      const value = parseFloat(valleyDepthSlider.value)
-      this.terrainBuilder.updateConfig({ valleyDepth: value })
-      this.updateValueDisplay('valleyDepthValue', value.toFixed(1))
+    reliefAmplitudeSlider.addEventListener('input', () => {
+      const value = parseFloat(reliefAmplitudeSlider.value)
+      this.terrainBuilder.updateConfig({ reliefAmplitude: value })
+      this.updateValueDisplay('reliefAmplitudeValue', `${value.toFixed(1)}x`)
+    })
+
+    featureScaleSlider.addEventListener('input', () => {
+      const value = parseFloat(featureScaleSlider.value)
+      this.terrainBuilder.updateConfig({ featureScale: value })
+      this.updateValueDisplay('featureScaleValue', `${value.toFixed(1)}x`)
     })
 
     seedInput.addEventListener('input', () => {
@@ -322,9 +329,10 @@ export class UIController {
     
     // Update terrain generation controls
     const terrainSizeSlider = document.getElementById('terrainSize') as HTMLInputElement
-    const heightScaleSlider = document.getElementById('heightScale') as HTMLInputElement
-    const mountainIntensitySlider = document.getElementById('mountainIntensity') as HTMLInputElement
-    const valleyDepthSlider = document.getElementById('valleyDepth') as HTMLInputElement
+    const geologicalComplexitySlider = document.getElementById('geologicalComplexity') as HTMLInputElement
+    const domainWarpingSlider = document.getElementById('domainWarping') as HTMLInputElement
+    const reliefAmplitudeSlider = document.getElementById('reliefAmplitude') as HTMLInputElement
+    const featureScaleSlider = document.getElementById('featureScale') as HTMLInputElement
     const seedInput = document.getElementById('seed') as HTMLInputElement
     const gridToggle = document.getElementById('gridToggle') as HTMLInputElement
 
@@ -333,19 +341,24 @@ export class UIController {
       this.updateValueDisplay('terrainSizeValue', `${config.size} km`)
     }
 
-    if (heightScaleSlider) {
-      heightScaleSlider.value = config.heightScale.toString()
-      this.updateValueDisplay('heightScaleValue', `${config.heightScale}x`)
+    if (geologicalComplexitySlider) {
+      geologicalComplexitySlider.value = config.geologicalComplexity.toString()
+      this.updateValueDisplay('geologicalComplexityValue', config.geologicalComplexity.toFixed(1))
     }
 
-    if (mountainIntensitySlider) {
-      mountainIntensitySlider.value = config.mountainIntensity.toString()
-      this.updateValueDisplay('mountainIntensityValue', config.mountainIntensity.toFixed(1))
+    if (domainWarpingSlider) {
+      domainWarpingSlider.value = config.domainWarping.toString()
+      this.updateValueDisplay('domainWarpingValue', config.domainWarping.toFixed(2))
     }
 
-    if (valleyDepthSlider) {
-      valleyDepthSlider.value = config.valleyDepth.toString()
-      this.updateValueDisplay('valleyDepthValue', config.valleyDepth.toFixed(1))
+    if (reliefAmplitudeSlider) {
+      reliefAmplitudeSlider.value = config.reliefAmplitude.toString()
+      this.updateValueDisplay('reliefAmplitudeValue', `${config.reliefAmplitude.toFixed(1)}x`)
+    }
+
+    if (featureScaleSlider) {
+      featureScaleSlider.value = config.featureScale.toString()
+      this.updateValueDisplay('featureScaleValue', `${config.featureScale.toFixed(1)}x`)
     }
 
     if (seedInput) {
