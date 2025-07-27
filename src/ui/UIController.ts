@@ -1,139 +1,378 @@
+import { GUI } from 'lil-gui'
 import { TerrainBuilder, EditorMode } from '../core/TerrainBuilder'
 import { BrushMode } from '../core/BrushSystem'
 
 export class UIController {
   private terrainBuilder: TerrainBuilder
   private canvas: HTMLCanvasElement
+  private gui!: GUI
+  private modeToggleButton!: HTMLButtonElement
+  private noiseLayersFolder: any = null
+  private updateTimeout: number | null = null
+
+  // UI state objects for lil-gui
+  private terrainParams = {
+    size: 5,
+    geologicalComplexity: 1.0,
+    domainWarping: 0.5,
+    reliefAmplitude: 2.0,
+    featureScale: 1.5,
+    seed: 123456,
+    showGrid: true,
+    randomizeSeed: () => this.randomizeSeed()
+  }
+
+  private brushParams = {
+    mode: 'raise' as BrushMode,
+    size: 10,
+    strength: 0.5
+  }
+
+  private mountainPresets = {
+    alaskanEverest: () => this.applyMountainPreset('alaskan'),
+    nevadaNewMexico: () => this.applyMountainPreset('desert')
+  }
+
+  private erosionPresets = {
+    gentleRain: () => this.applyGentleErosion(),
+    createRiver: () => this.createRiver()
+  }
+
+  private exportActions = {
+    exportHeightmap: () => this.exportHeightmap(),
+    exportProject: () => this.exportProject()
+  }
+
+  private guideInfo = {
+    orbitControls: "Drag to rotate, wheel to zoom",
+    brushControls: "Click and drag to sculpt terrain",
+    modeSwitch: "Use the Mode button (top-left) to switch between Orbit and Brush modes",
+    terrainTips: "Adjust geological parameters for different terrain types",
+    brushTips: "Different brush modes: Raise/Lower for height, Smooth for blending, Flatten for plateaus",
+    presetTips: "Mountain presets apply specialized large-scale brushes - switch to Brush mode first"
+  }
 
   constructor(terrainBuilder: TerrainBuilder) {
     this.terrainBuilder = terrainBuilder
     this.canvas = document.getElementById('canvas') as HTMLCanvasElement
     
-    this.setupEventListeners()
-    this.updateUI()
+    this.setupModeToggle()
+    this.setupGUI()
+    this.setupCanvasEvents()
+    this.syncUIWithTerrain()
   }
 
-  private setupEventListeners(): void {
-    // Mode switching
-    this.setupModeControls()
+  private setupModeToggle(): void {
+    this.modeToggleButton = document.createElement('button')
+    this.modeToggleButton.style.position = 'absolute'
+    this.modeToggleButton.style.top = '50px'
+    this.modeToggleButton.style.left = '10px'
+    this.modeToggleButton.style.padding = '10px 20px'
+    this.modeToggleButton.style.background = '#0066cc'
+    this.modeToggleButton.style.color = 'white'
+    this.modeToggleButton.style.border = 'none'
+    this.modeToggleButton.style.borderRadius = '6px'
+    this.modeToggleButton.style.cursor = 'pointer'
+    this.modeToggleButton.style.fontSize = '14px'
+    this.modeToggleButton.style.fontWeight = 'bold'
+    this.modeToggleButton.style.zIndex = '1000'
+    this.modeToggleButton.textContent = 'Mode: Orbit'
     
-    // Terrain generation controls
-    const terrainSizeSlider = document.getElementById('terrainSize') as HTMLInputElement
-    const geologicalComplexitySlider = document.getElementById('geologicalComplexity') as HTMLInputElement
-    const domainWarpingSlider = document.getElementById('domainWarping') as HTMLInputElement
-    const reliefAmplitudeSlider = document.getElementById('reliefAmplitude') as HTMLInputElement
-    const featureScaleSlider = document.getElementById('featureScale') as HTMLInputElement
-    const seedInput = document.getElementById('seed') as HTMLInputElement
-    const randomizeSeedBtn = document.getElementById('randomizeSeed') as HTMLButtonElement
+    document.body.appendChild(this.modeToggleButton)
 
-    terrainSizeSlider.addEventListener('input', () => {
-      const value = parseFloat(terrainSizeSlider.value)
-      this.terrainBuilder.updateConfig({ size: value })
-      this.updateValueDisplay('terrainSizeValue', `${value} km`)
-    })
-
-    geologicalComplexitySlider.addEventListener('input', () => {
-      const value = parseFloat(geologicalComplexitySlider.value)
-      this.terrainBuilder.updateConfig({ geologicalComplexity: value })
-      this.updateValueDisplay('geologicalComplexityValue', value.toFixed(1))
-    })
-
-    domainWarpingSlider.addEventListener('input', () => {
-      const value = parseFloat(domainWarpingSlider.value)
-      this.terrainBuilder.updateConfig({ domainWarping: value })
-      this.updateValueDisplay('domainWarpingValue', value.toFixed(2))
-    })
-
-    reliefAmplitudeSlider.addEventListener('input', () => {
-      const value = parseFloat(reliefAmplitudeSlider.value)
-      this.terrainBuilder.updateConfig({ reliefAmplitude: value })
-      this.updateValueDisplay('reliefAmplitudeValue', `${value.toFixed(1)}x`)
-    })
-
-    featureScaleSlider.addEventListener('input', () => {
-      const value = parseFloat(featureScaleSlider.value)
-      this.terrainBuilder.updateConfig({ featureScale: value })
-      this.updateValueDisplay('featureScaleValue', `${value.toFixed(1)}x`)
-    })
-
-    seedInput.addEventListener('input', () => {
-      const value = parseInt(seedInput.value)
-      if (!isNaN(value)) {
-        this.terrainBuilder.updateConfig({ seed: value })
-        this.updateValueDisplay('seedValue', value.toString())
+    this.modeToggleButton.addEventListener('click', () => {
+      const currentMode = this.terrainBuilder.getMode()
+      const newMode: EditorMode = currentMode === 'orbit' ? 'brush' : 'orbit'
+      
+      this.terrainBuilder.setMode(newMode)
+      this.modeToggleButton.textContent = `Mode: ${newMode.charAt(0).toUpperCase() + newMode.slice(1)}`
+      
+      if (newMode === 'orbit') {
+        this.modeToggleButton.style.background = '#0066cc'
+      } else {
+        this.modeToggleButton.style.background = '#cc6600'
       }
     })
+  }
 
-    randomizeSeedBtn.addEventListener('click', () => {
-      this.terrainBuilder.randomizeSeed()
-      const newSeed = this.terrainBuilder.getConfig().seed
-      seedInput.value = newSeed.toString()
-      this.updateValueDisplay('seedValue', newSeed.toString())
-    })
-
-    // Brush controls
-    const brushModes = document.querySelectorAll('.brush-mode')
-    const brushSizeSlider = document.getElementById('brushSize') as HTMLInputElement
-    const brushStrengthSlider = document.getElementById('brushStrength') as HTMLInputElement
-
-    brushModes.forEach(mode => {
-      mode.addEventListener('click', () => {
-        brushModes.forEach(m => m.classList.remove('active'))
-        mode.classList.add('active')
-        
-        const brushMode = mode.getAttribute('data-mode') as BrushMode
-        this.terrainBuilder.getBrushSystem().setBrushSettings({ mode: brushMode })
+  private setupGUI(): void {
+    this.gui = new GUI({ title: 'Weltbuilder Controls', width: 320 })
+    
+    // Position GUI flush with right edge
+    this.gui.domElement.style.position = 'fixed'
+    this.gui.domElement.style.top = '0px'
+    this.gui.domElement.style.right = '0px'
+    
+    // Terrain Generation folder
+    const terrainFolder = this.gui.addFolder('Terrain Generation')
+    
+    terrainFolder.add(this.terrainParams, 'size', 1, 20, 1)
+      .name('Size (km)')
+      .onChange((value: number) => {
+        this.terrainBuilder.updateConfig({ size: value })
       })
+
+    terrainFolder.add(this.terrainParams, 'geologicalComplexity', 0.0, 2.0, 0.1)
+      .name('Geological Complexity')
+      .onChange((value: number) => {
+        this.terrainBuilder.updateConfig({ geologicalComplexity: value })
+      })
+
+    terrainFolder.add(this.terrainParams, 'domainWarping', 0.0, 1.0, 0.05)
+      .name('Domain Warping')
+      .onChange((value: number) => {
+        this.terrainBuilder.updateConfig({ domainWarping: value })
+      })
+
+    terrainFolder.add(this.terrainParams, 'reliefAmplitude', 0.2, 4.0, 0.1)
+      .name('Relief Amplitude')
+      .onChange((value: number) => {
+        this.terrainBuilder.updateConfig({ reliefAmplitude: value })
+      })
+
+    terrainFolder.add(this.terrainParams, 'featureScale', 0.1, 3.0, 0.1)
+      .name('Feature Scale')
+      .onChange((value: number) => {
+        this.terrainBuilder.updateConfig({ featureScale: value })
+      })
+
+    terrainFolder.add(this.terrainParams, 'seed')
+      .name('Seed')
+      .onChange((value: number) => {
+        this.terrainBuilder.updateConfig({ seed: value })
+      })
+
+    terrainFolder.add(this.terrainParams, 'randomizeSeed')
+      .name('🎲 Randomize Seed')
+
+    terrainFolder.add(this.terrainParams, 'showGrid')
+      .name('Show Grid')
+      .onChange((value: boolean) => {
+        this.terrainBuilder.toggleGrid(value)
+      })
+
+    terrainFolder.open()
+
+    // Brush Tools folder
+    const brushFolder = this.gui.addFolder('Brush Tools')
+    
+    brushFolder.add(this.brushParams, 'mode', ['raise', 'lower', 'smooth', 'flatten', 'mountain'])
+      .name('Brush Mode')
+      .onChange((value: BrushMode) => {
+        this.terrainBuilder.getBrushSystem().setBrushSettings({ mode: value })
+      })
+
+    brushFolder.add(this.brushParams, 'size', 1, 500, 1)
+      .name('Brush Size (m)')
+      .onChange((value: number) => {
+        this.terrainBuilder.getBrushSystem().setBrushSettings({ size: value })
+      })
+
+    brushFolder.add(this.brushParams, 'strength', 0.1, 2.0, 0.1)
+      .name('Brush Strength')
+      .onChange((value: number) => {
+        this.terrainBuilder.getBrushSystem().setBrushSettings({ strength: value })
+      })
+
+    brushFolder.open()
+
+    // Mountain Presets folder
+    const mountainFolder = this.gui.addFolder('Mountain Presets')
+    
+    mountainFolder.add(this.mountainPresets, 'alaskanEverest')
+      .name('🏔️ Alaskan/Everest')
+    
+    mountainFolder.add(this.mountainPresets, 'nevadaNewMexico')
+      .name('🏜️ Nevada/New Mexico')
+
+    // Erosion Presets folder
+    const erosionFolder = this.gui.addFolder('Erosion Presets')
+    
+    erosionFolder.add(this.erosionPresets, 'gentleRain')
+      .name('🌧️ Gentle Rain')
+    
+    erosionFolder.add(this.erosionPresets, 'createRiver')
+      .name('🏞️ Create River')
+
+    // Export folder
+    const exportFolder = this.gui.addFolder('Export')
+    
+    exportFolder.add(this.exportActions, 'exportHeightmap')
+      .name('Export Heightmap')
+    
+    exportFolder.add(this.exportActions, 'exportProject')
+      .name('Export Project')
+
+    // Guide folder (collapsed by default)
+    const guideFolder = this.gui.addFolder('Guide')
+    
+    // Add guide items as read-only text controllers
+    guideFolder.add(this.guideInfo, 'orbitControls')
+      .name('🔄 Orbit Mode')
+      .disable()
+    
+    guideFolder.add(this.guideInfo, 'brushControls')
+      .name('🖌️ Brush Mode')
+      .disable()
+    
+    guideFolder.add(this.guideInfo, 'modeSwitch')
+      .name('🔀 Mode Switching')
+      .disable()
+    
+    guideFolder.add(this.guideInfo, 'terrainTips')
+      .name('🏔️ Terrain Tips')
+      .disable()
+    
+    guideFolder.add(this.guideInfo, 'brushTips')
+      .name('🎨 Brush Tips')
+      .disable()
+    
+    guideFolder.add(this.guideInfo, 'presetTips')
+      .name('📦 Preset Tips')
+      .disable()
+    
+    // Keep guide folder closed by default
+    guideFolder.close()
+    
+    // Setup noise layers folder
+    this.setupNoiseLayersFolder()
+  }
+
+  private setupNoiseLayersFolder(): void {
+    // Only create if it doesn't exist
+    if (!this.noiseLayersFolder) {
+      this.noiseLayersFolder = this.gui.addFolder('Noise Layers')
+      // Populate it with initial data
+      this.populateNoiseLayersFolder()
+    }
+  }
+
+  private populateNoiseLayersFolder(): void {
+    if (!this.noiseLayersFolder) return
+    
+    // Get layers data from terrain builder
+    const layersData = this.terrainBuilder.getNoiseLayersData()
+    const { layers, baseLayers } = layersData
+    
+    // Create controls for each layer
+    this.createLayerControls(layers, baseLayers)
+    
+    // Add management controls
+    this.addLayerManagementControls(layers)
+    
+    this.noiseLayersFolder.open()
+  }
+
+  private updateNoiseLayersFolder(): void {
+    // Destroy and recreate the entire folder to avoid duplicates
+    if (this.noiseLayersFolder) {
+      try {
+        // Try to destroy the folder completely
+        this.noiseLayersFolder.destroy()
+      } catch (e) {
+        // If destroy doesn't work, try to clear manually
+        console.log('Manual cleanup of noise layers folder')
+      }
+    }
+    
+    // Always recreate the folder fresh
+    this.noiseLayersFolder = this.gui.addFolder('Noise Layers')
+    
+    // Get fresh layers data
+    const layersData = this.terrainBuilder.getNoiseLayersData()
+    const { layers, baseLayers } = layersData
+    
+    // Create controls for each layer
+    this.createLayerControls(layers, baseLayers)
+    
+    // Add management controls
+    this.addLayerManagementControls(layers)
+    
+    this.noiseLayersFolder.open()
+  }
+
+  private createLayerControls(layers: any[], baseLayers: any[]): void {
+    layers.forEach((layer: any, index: number) => {
+      const isCustomLayer = index >= baseLayers.length
+      const layerName = `${index + 1}. ${layer.type.toUpperCase()}${isCustomLayer ? ' (Custom)' : ''}`
+      
+      const folder = this.noiseLayersFolder.addFolder(layerName)
+      
+      // Weight controller
+      const weightControl = {
+        weight: Math.round(layer.weight * 100)
+      }
+      
+      folder.add(weightControl, 'weight', 0, 100, 1)
+        .name('Weight %')
+        .onChange((value: number) => {
+          console.log(`Layer ${index} weight changed to ${value}%`)
+          this.terrainBuilder.updateLayerWeight(index, value / 100, false)
+        })
+      
+      // Add preview canvas to folder
+      const previewContainer = document.createElement('div')
+      previewContainer.style.padding = '8px'
+      
+      const canvas = document.createElement('canvas')
+      canvas.width = 120
+      canvas.height = 120
+      canvas.style.width = '120px'
+      canvas.style.height = '120px'
+      canvas.style.border = '1px solid #666'
+      canvas.style.borderRadius = '4px'
+      canvas.style.background = '#222'
+      canvas.style.display = 'block'
+      canvas.style.margin = '0 auto'
+      
+      this.terrainBuilder.generateLayerPreview(canvas, layer)
+      
+      previewContainer.appendChild(canvas)
+      folder.domElement.appendChild(previewContainer)
+      
+      // Remove button for custom layers
+      if (isCustomLayer) {
+        const removeControl = {
+          remove: () => {
+            this.terrainBuilder.removeLayer(index)
+            this.updateNoiseLayersGUI() // Use the debounced version
+          }
+        }
+        folder.add(removeControl, 'remove').name('🗑️ Remove Layer')
+      }
+      
+      folder.open()
     })
+  }
 
-    brushSizeSlider.addEventListener('input', () => {
-      const value = parseFloat(brushSizeSlider.value)
-      this.terrainBuilder.getBrushSystem().setBrushSettings({ size: value })
-      this.updateValueDisplay('brushSizeValue', `${value}m`)
-    })
+  private addLayerManagementControls(layers: any[]): void {
+    // Add layer button
+    const addLayerControl = {
+      addLayer: () => this.terrainBuilder.showAddLayerDialog()
+    }
+    this.noiseLayersFolder.add(addLayerControl, 'addLayer').name('➕ Add Layer')
+    
+    // Weight summary
+    const totalWeight = layers.reduce((sum: number, layer: any) => sum + layer.weight, 0)
+    const summaryControl = {
+      totalWeight: `${(totalWeight * 100).toFixed(1)}%`
+    }
+    this.noiseLayersFolder.add(summaryControl, 'totalWeight').name('Total Weight').disable()
+  }
 
-    brushStrengthSlider.addEventListener('input', () => {
-      const value = parseFloat(brushStrengthSlider.value)
-      this.terrainBuilder.getBrushSystem().setBrushSettings({ strength: value })
-      this.updateValueDisplay('brushStrengthValue', value.toString())
-    })
+  public updateNoiseLayersGUI(): void {
+    // Debounce multiple rapid calls to prevent duplicates
+    if (this.updateTimeout) {
+      clearTimeout(this.updateTimeout)
+    }
+    
+    this.updateTimeout = setTimeout(() => {
+      this.updateNoiseLayersFolder()
+      this.updateTimeout = null
+    }, 50) // Small delay to batch updates
+  }
 
-    // Mountain preset controls
-    const alaskanPresetBtn = document.getElementById('alaskanPreset') as HTMLButtonElement
-    const desertMountainPresetBtn = document.getElementById('desertMountainPreset') as HTMLButtonElement
-
-    alaskanPresetBtn.addEventListener('click', () => {
-      this.terrainBuilder.getBrushSystem().applyMountainPreset('alaskan')
-      this.updateBrushUI()
-    })
-
-    desertMountainPresetBtn.addEventListener('click', () => {
-      this.terrainBuilder.getBrushSystem().applyMountainPreset('desert')
-      this.updateBrushUI()
-    })
-
-    // Export controls
-    const exportHeightmapBtn = document.getElementById('exportHeightmap') as HTMLButtonElement
-    const exportProjectBtn = document.getElementById('exportProject') as HTMLButtonElement
-
-    exportHeightmapBtn.addEventListener('click', () => {
-      this.exportHeightmap()
-    })
-
-    exportProjectBtn.addEventListener('click', () => {
-      this.exportProject()
-    })
-
-    // Grid toggle control
-    const gridToggle = document.getElementById('gridToggle') as HTMLInputElement
-    gridToggle.addEventListener('change', () => {
-      this.terrainBuilder.toggleGrid(gridToggle.checked)
-    })
-
-    // Erosion controls
-    this.setupErosionControls()
-
-    // Canvas mouse events for brush system
+  private setupCanvasEvents(): void {
     this.canvas.addEventListener('mousedown', (event) => {
       this.terrainBuilder.getBrushSystem().handleMouseDown(
         event,
@@ -155,226 +394,60 @@ export class UIController {
     })
   }
 
-  private setupModeControls(): void {
-    // Create mode toggle button if it doesn't exist
-    let modeToggle = document.getElementById('modeToggle') as HTMLButtonElement
-    if (!modeToggle) {
-      modeToggle = document.createElement('button')
-      modeToggle.id = 'modeToggle'
-      modeToggle.style.position = 'absolute'
-      modeToggle.style.top = '10px'
-      modeToggle.style.right = '320px'
-      modeToggle.style.padding = '10px 20px'
-      modeToggle.style.background = '#0066cc'
-      modeToggle.style.color = 'white'
-      modeToggle.style.border = 'none'
-      modeToggle.style.borderRadius = '6px'
-      modeToggle.style.cursor = 'pointer'
-      modeToggle.style.fontSize = '14px'
-      modeToggle.style.fontWeight = 'bold'
-      modeToggle.style.zIndex = '1000'
-      modeToggle.textContent = 'Mode: Orbit'
-      
-      document.body.appendChild(modeToggle)
-    }
-
-    modeToggle.addEventListener('click', () => {
-      const currentMode = this.terrainBuilder.getMode()
-      const newMode: EditorMode = currentMode === 'orbit' ? 'brush' : 'orbit'
-      
-      this.terrainBuilder.setMode(newMode)
-      modeToggle.textContent = `Mode: ${newMode.charAt(0).toUpperCase() + newMode.slice(1)}`
-      
-      if (newMode === 'orbit') {
-        modeToggle.style.background = '#0066cc'
-      } else {
-        modeToggle.style.background = '#cc6600'
-      }
-    })
-  }
-
-  private updateValueDisplay(elementId: string, value: string): void {
-    const element = document.getElementById(elementId)
-    if (element) {
-      element.textContent = value
-    }
-  }
-
-  private updateBrushUI(): void {
-    const settings = this.terrainBuilder.getBrushSystem().getBrushSettings()
-    
-    // Update brush mode buttons
-    const brushModes = document.querySelectorAll('.brush-mode')
-    brushModes.forEach(mode => {
-      mode.classList.remove('active')
-      if (mode.getAttribute('data-mode') === settings.mode) {
-        mode.classList.add('active')
-      }
-    })
-    
-    // Update sliders
-    const brushSizeSlider = document.getElementById('brushSize') as HTMLInputElement
-    const brushStrengthSlider = document.getElementById('brushStrength') as HTMLInputElement
-    
-    if (brushSizeSlider) {
-      brushSizeSlider.value = settings.size.toString()
-      this.updateValueDisplay('brushSizeValue', `${settings.size}m`)
-    }
-    
-    if (brushStrengthSlider) {
-      brushStrengthSlider.value = settings.strength.toString()
-      this.updateValueDisplay('brushStrengthValue', settings.strength.toString())
-    }
-  }
-
-  private setupErosionControls(): void {
-    // Erosion preset buttons
-    const gentleErosionBtn = document.getElementById('gentleErosion') as HTMLButtonElement
-
-    // Custom erosion controls
-    const erosionIterationsSlider = document.getElementById('erosionIterations') as HTMLInputElement
-    const rainStrengthSlider = document.getElementById('rainStrength') as HTMLInputElement
-    const erosionStrengthSlider = document.getElementById('erosionStrength') as HTMLInputElement
-    const thermalRateSlider = document.getElementById('thermalRate') as HTMLInputElement
-    const applyCustomErosionBtn = document.getElementById('applyCustomErosion') as HTMLButtonElement
-
-    // River creation controls
-    const createRiverBtn = document.getElementById('createRiver') as HTMLButtonElement
-
-    // Preset erosion buttons
-    gentleErosionBtn?.addEventListener('click', () => {
-      this.terrainBuilder.applyGentleErosion()
-    })
-
-    // Custom erosion sliders
-    erosionIterationsSlider?.addEventListener('input', () => {
-      const value = parseInt(erosionIterationsSlider.value)
-      this.updateValueDisplay('erosionIterationsValue', value.toString())
-    })
-
-    rainStrengthSlider?.addEventListener('input', () => {
-      const value = parseFloat(rainStrengthSlider.value)
-      this.updateValueDisplay('rainStrengthValue', value.toFixed(3))
-    })
-
-    erosionStrengthSlider?.addEventListener('input', () => {
-      const value = parseFloat(erosionStrengthSlider.value)
-      this.updateValueDisplay('erosionStrengthValue', value.toFixed(2))
-    })
-
-    thermalRateSlider?.addEventListener('input', () => {
-      const value = parseFloat(thermalRateSlider.value)
-      this.updateValueDisplay('thermalRateValue', value.toFixed(2))
-    })
-
-    // Apply custom erosion
-    applyCustomErosionBtn?.addEventListener('click', () => {
-      const config = {
-        iterations: erosionIterationsSlider ? parseInt(erosionIterationsSlider.value) : 100,
-        rainStrength: rainStrengthSlider ? parseFloat(rainStrengthSlider.value) : 0.02,
-        erosionStrength: erosionStrengthSlider ? parseFloat(erosionStrengthSlider.value) : 0.3,
-        thermalRate: thermalRateSlider ? parseFloat(thermalRateSlider.value) : 0.1
-      }
-      this.terrainBuilder.applyErosion(config)
-    })
-
-    // River creation - simplified version using center points
-    createRiverBtn?.addEventListener('click', () => {
-      // Create a river from one side to another as an example
-      const size = this.terrainBuilder.getConfig().size * 1000
-      const startX = -size * 0.3
-      const startY = size * 0.2
-      const endX = size * 0.3
-      const endY = -size * 0.2
-      
-      this.terrainBuilder.createRiver(startX, startY, endX, endY)
-    })
-
-    // Initialize erosion UI values
-    this.updateErosionUI()
-  }
-
-  private updateErosionUI(): void {
-    const config = this.terrainBuilder.getErosionConfig()
-    
-    // Update slider values
-    const erosionIterationsSlider = document.getElementById('erosionIterations') as HTMLInputElement
-    const rainStrengthSlider = document.getElementById('rainStrength') as HTMLInputElement
-    const erosionStrengthSlider = document.getElementById('erosionStrength') as HTMLInputElement
-    const thermalRateSlider = document.getElementById('thermalRate') as HTMLInputElement
-
-    if (erosionIterationsSlider) {
-      erosionIterationsSlider.value = config.iterations.toString()
-      this.updateValueDisplay('erosionIterationsValue', config.iterations.toString())
-    }
-
-    if (rainStrengthSlider) {
-      rainStrengthSlider.value = config.rainStrength.toString()
-      this.updateValueDisplay('rainStrengthValue', config.rainStrength.toFixed(3))
-    }
-
-    if (erosionStrengthSlider) {
-      erosionStrengthSlider.value = config.erosionStrength.toString()
-      this.updateValueDisplay('erosionStrengthValue', config.erosionStrength.toFixed(2))
-    }
-
-    if (thermalRateSlider) {
-      thermalRateSlider.value = config.thermalRate.toString()
-      this.updateValueDisplay('thermalRateValue', config.thermalRate.toFixed(2))
-    }
-  }
-
-  private updateUI(): void {
+  private syncUIWithTerrain(): void {
     const config = this.terrainBuilder.getConfig()
     
-    // Update terrain generation controls
-    const terrainSizeSlider = document.getElementById('terrainSize') as HTMLInputElement
-    const geologicalComplexitySlider = document.getElementById('geologicalComplexity') as HTMLInputElement
-    const domainWarpingSlider = document.getElementById('domainWarping') as HTMLInputElement
-    const reliefAmplitudeSlider = document.getElementById('reliefAmplitude') as HTMLInputElement
-    const featureScaleSlider = document.getElementById('featureScale') as HTMLInputElement
-    const seedInput = document.getElementById('seed') as HTMLInputElement
-    const gridToggle = document.getElementById('gridToggle') as HTMLInputElement
+    // Update terrain params
+    this.terrainParams.size = config.size
+    this.terrainParams.geologicalComplexity = config.geologicalComplexity
+    this.terrainParams.domainWarping = config.domainWarping
+    this.terrainParams.reliefAmplitude = config.reliefAmplitude
+    this.terrainParams.featureScale = config.featureScale
+    this.terrainParams.seed = config.seed
+    this.terrainParams.showGrid = this.terrainBuilder.isGridVisible()
 
-    if (terrainSizeSlider) {
-      terrainSizeSlider.value = config.size.toString()
-      this.updateValueDisplay('terrainSizeValue', `${config.size} km`)
-    }
+    // Update brush params
+    const brushSettings = this.terrainBuilder.getBrushSystem().getBrushSettings()
+    this.brushParams.mode = brushSettings.mode
+    this.brushParams.size = brushSettings.size
+    this.brushParams.strength = brushSettings.strength
 
-    if (geologicalComplexitySlider) {
-      geologicalComplexitySlider.value = config.geologicalComplexity.toString()
-      this.updateValueDisplay('geologicalComplexityValue', config.geologicalComplexity.toFixed(1))
-    }
+    // Refresh GUI to show updated values
+    this.updateGUIDisplay()
+  }
 
-    if (domainWarpingSlider) {
-      domainWarpingSlider.value = config.domainWarping.toString()
-      this.updateValueDisplay('domainWarpingValue', config.domainWarping.toFixed(2))
-    }
+  private randomizeSeed(): void {
+    this.terrainBuilder.randomizeSeed()
+    const newSeed = this.terrainBuilder.getConfig().seed
+    this.terrainParams.seed = newSeed
+    this.updateGUIDisplay()
+  }
 
-    if (reliefAmplitudeSlider) {
-      reliefAmplitudeSlider.value = config.reliefAmplitude.toString()
-      this.updateValueDisplay('reliefAmplitudeValue', `${config.reliefAmplitude.toFixed(1)}x`)
-    }
+  private applyMountainPreset(preset: 'alaskan' | 'desert'): void {
+    this.terrainBuilder.getBrushSystem().applyMountainPreset(preset)
+    this.syncBrushUI()
+  }
 
-    if (featureScaleSlider) {
-      featureScaleSlider.value = config.featureScale.toString()
-      this.updateValueDisplay('featureScaleValue', `${config.featureScale.toFixed(1)}x`)
-    }
+  private applyGentleErosion(): void {
+    this.terrainBuilder.applyGentleErosion()
+  }
 
-    if (seedInput) {
-      seedInput.value = config.seed.toString()
-      this.updateValueDisplay('seedValue', config.seed.toString())
-    }
-
-    if (gridToggle) {
-      gridToggle.checked = this.terrainBuilder.isGridVisible()
-    }
-
-    // Update brush controls
-    this.updateBrushUI()
+  private createRiver(): void {
+    const size = this.terrainBuilder.getConfig().size * 1000
+    const startX = -size * 0.3
+    const startY = size * 0.2
+    const endX = size * 0.3
+    const endY = -size * 0.2
     
-    // Update erosion controls
-    this.updateErosionUI()
+    this.terrainBuilder.createRiver(startX, startY, endX, endY)
+  }
+
+  private syncBrushUI(): void {
+    const settings = this.terrainBuilder.getBrushSystem().getBrushSettings()
+    this.brushParams.mode = settings.mode
+    this.brushParams.size = settings.size
+    this.brushParams.strength = settings.strength
+    this.updateGUIDisplay()
   }
 
   private exportHeightmap(): void {
@@ -407,5 +480,12 @@ export class UIController {
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
+  }
+
+  private updateGUIDisplay(): void {
+    // Update all controllers in all folders
+    this.gui.controllersRecursive().forEach(controller => {
+      controller.updateDisplay()
+    })
   }
 } 

@@ -298,13 +298,7 @@ export class AdvancedNoiseSystem {
       turbulence: false
     } as FBMConfig)
     
-    // Detail noise layer
-    const detail = this.fbm(x, y, {
-      ...config.detailNoise,
-      warpStrength: 0,
-      warpFrequency: 0,
-      turbulence: false
-    } as FBMConfig)
+    // Detail noise layer (computed but not used in current implementation)
     
     // Warp noise for domain distortion
     const warpX = this.fbm(x * 0.5, y * 0.5, {

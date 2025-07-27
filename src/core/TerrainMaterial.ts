@@ -88,7 +88,7 @@ export class TerrainMaterial {
             }
           },
           undefined,
-          (error) => {
+          (_error) => {
             console.warn(`Failed to load texture: ${texturePath}, using fallback`)
           }
         )

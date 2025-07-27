@@ -1,12 +1,25 @@
-import { AdvancedNoiseSystem, NoiseType, NoiseConfig, RidgedNoiseConfig, FBMConfig, HybridConfig } from './AdvancedNoiseSystem'
+import { AdvancedNoiseSystem, NoiseType, NoiseConfig, RidgedNoiseConfig, FBMConfig } from './AdvancedNoiseSystem'
+
+export enum BlendMode {
+  ADD = 'add',
+  MULTIPLY = 'multiply', 
+  OVERLAY = 'overlay',
+  SCREEN = 'screen',
+  SUBTRACT = 'subtract',
+  MASK_ELEVATION = 'mask_elevation', // New: Only apply to specific elevation ranges
+  MASK_SLOPE = 'mask_slope',         // New: Only apply to specific slope ranges
+  VORONOI_ISLANDS = 'voronoi_islands' // New: Voronoi-based island generation
+}
 
 export interface TerrainLayer {
   type: NoiseType
   config: any
   weight: number
+  blendMode: BlendMode
   maskType?: NoiseType
   maskConfig?: any
-  blendMode: 'add' | 'multiply' | 'overlay' | 'screen' | 'subtract'
+  elevationRange?: { min: number; max: number } // For elevation-based masking
+  slopeRange?: { min: number; max: number }     // For slope-based masking
 }
 
 export interface AdvancedTerrainConfig {
@@ -19,6 +32,9 @@ export interface AdvancedTerrainConfig {
   domainWarping?: number // 0.0-1.0: Controls natural terrain flow and organic appearance  
   reliefAmplitude?: number // 0.2-4.0: Master height scaling with geological context
   featureScale?: number // 0.1-3.0: Controls size/frequency of geological features
+  
+  // Advanced blending controls
+  useAdvancedBlending?: boolean // Enable advanced blending modes from demo
   
   // Legacy terrain controls (deprecated but kept for compatibility)
   heightScale?: number
@@ -111,6 +127,9 @@ export class AdvancedTerrainGenerator {
       domainWarping: 0.5,
       reliefAmplitude: 2.0,
       featureScale: 1.5,
+      
+              // Advanced blending controls
+        useAdvancedBlending: true,
       
       // Legacy terrain controls (deprecated but kept for compatibility)
       heightScale: 1.0,
@@ -211,8 +230,15 @@ export class AdvancedTerrainGenerator {
           warpedY += this.noiseSystem.perlin(warpedX * secondaryScale + 700, warpedY * secondaryScale + 800) * secondaryWarp
         }
         
-        // Generate base terrain using multi-scale composition with intelligent layering
-        let height = this.noiseSystem.multiScaleNoise(warpedX, warpedY, layers)
+        let height: number
+        
+        // Use advanced blending if enabled, otherwise use original method
+        if (this.config.useAdvancedBlending) {
+          height = this.generateAdvancedTerrain(warpedX, warpedY, type, layers, geologicalComplexity, featureScale)
+        } else {
+          // Original terrain generation using multi-scale composition
+          height = this.noiseSystem.multiScaleNoise(warpedX, warpedY, layers)
+        }
         
         // Apply geological features with new parameter control
         if (adjustedConfig.mountainRanges.enabled) {
@@ -252,7 +278,7 @@ export class AdvancedTerrainGenerator {
     return this.postProcess(heightData)
   }
 
-  private getTerrainTypeLayers(type: TerrainType, geologicalComplexity: number, featureScale: number): Array<{ type: NoiseType; config: any; weight: number }> {
+  public getTerrainTypeLayers(type: TerrainType, geologicalComplexity: number, featureScale: number): Array<{ type: NoiseType; config: any; weight: number }> {
     const baseConfig: NoiseConfig = {
       octaves: Math.round(6 + geologicalComplexity * 2), // 6-10 octaves based on complexity
       frequency: 0.8 / featureScale, // Inverse relationship with feature scale
@@ -370,8 +396,118 @@ export class AdvancedTerrainGenerator {
     }
   }
 
-  private applyContinentalShelf(x: number, y: number, height: number): number {
-    // Completely removed to eliminate ring artifacts
+  /**
+   * Advanced terrain generation using techniques from AdvancedNoiseDemo
+   * Includes elevation-based masking, overlay blending, and specialized terrain generation
+   */
+  private generateAdvancedTerrain(
+    x: number, 
+    y: number, 
+    type: TerrainType, 
+    layers: Array<{ type: NoiseType; config: any; weight: number }>,
+    geologicalComplexity: number,
+    featureScale: number
+  ): number {
+    // Special handling for island chains using Voronoi technique from demo
+    if (type === TerrainType.ISLAND_CHAIN) {
+      return this.generateVoronoiIslands(x, y, featureScale, geologicalComplexity)
+    }
+    
+    // Generate separate layers for advanced blending (inspired by demo's generateMultiLayerTerrain)
+    let baseHeight = 0
+    let ridgeHeight = 0
+    let detailHeight = 0
+    
+    // Base layer (primary terrain shape)
+    if (layers.length > 0) {
+      const baseLayer = layers[0]
+      baseHeight = this.noiseSystem.generateNoise(x, y, baseLayer.type, baseLayer.config) * baseLayer.weight
+    }
+    
+    // Ridge layer (mountain ridges and dramatic features)
+    if (layers.length > 1) {
+      const ridgeLayer = layers[1]
+      ridgeHeight = this.noiseSystem.generateNoise(x, y, ridgeLayer.type, ridgeLayer.config) * ridgeLayer.weight
+    }
+    
+    // Detail layer (fine surface details)
+    if (layers.length > 2) {
+      const detailLayer = layers[2]
+      detailHeight = this.noiseSystem.generateNoise(x, y, detailLayer.type, detailLayer.config) * detailLayer.weight
+    }
+    
+    // Start with base terrain
+    let height = baseHeight
+    
+    // Add ridges with elevation-based masking (only add ridges to higher areas)
+    // This technique from demo prevents ridges in low valleys
+    const elevationMask = Math.max(0, Math.min(1, (baseHeight + 100) / 200)) // Normalize base height for masking
+    height += ridgeHeight * elevationMask * 0.6
+    
+    // Apply overlay blending for detail layer (technique from demo)
+    const normalizedHeight = Math.max(0, Math.min(1, (height + 200) / 400))
+    const detailBlend = detailHeight / 20
+    
+    if (normalizedHeight < 0.5) {
+      // Screen blend for lower elevations
+      height += 2 * normalizedHeight * detailBlend
+    } else {
+      // Overlay blend for higher elevations  
+      height += (1 - 2 * (1 - normalizedHeight) * (1 - detailBlend)) * 20
+    }
+    
+    // Apply remaining layers with standard multi-scale approach
+    if (layers.length > 3) {
+      const remainingLayers = layers.slice(3)
+      height += this.noiseSystem.multiScaleNoise(x, y, remainingLayers)
+    }
+    
+    return height
+  }
+
+  /**
+   * Generate Voronoi-based island chains (technique from demo)
+   */
+  private generateVoronoiIslands(x: number, y: number, featureScale: number, geologicalComplexity: number): number {
+    // Voronoi for island placement (from demo's generateIslandChain)
+    const voronoi = this.noiseSystem.voronoiNoise(x, y, 0.4 / featureScale)
+    const islandMask = Math.max(0, 0.6 - voronoi) / 0.6
+    
+    // Ridged noise for volcanic peaks
+    const volcanic = this.noiseSystem.ridgedNoise(x, y, {
+      octaves: Math.round(6 + geologicalComplexity),
+      frequency: 1.0 / featureScale,
+      amplitude: 200,
+      persistence: 0.6,
+      lacunarity: 2.3,
+      seed: this.config.seed + 500,
+      offset: { x: 0, y: 0 },
+      ridgeOffset: 0.8,
+      gain: 4.0 + geologicalComplexity * 2.0,
+      threshold: 0.0
+    })
+    
+    // Turbulence for coastal variation
+    const coastal = this.noiseSystem.fbm(x, y, {
+      octaves: Math.round(4 + geologicalComplexity * 0.5),
+      frequency: 1.5 / featureScale,
+      amplitude: 30,
+      persistence: 0.5,
+      lacunarity: 2.0,
+      seed: this.config.seed + 600,
+      offset: { x: 200, y: 300 },
+      warpStrength: 0.4 + geologicalComplexity * 0.2,
+      warpFrequency: 0.6,
+      turbulence: true
+    })
+    
+    // Ocean depth falloff
+    const distance = Math.sqrt(x * x + y * y)
+    const oceanDepth = Math.max(0, (distance - 0.8) * 300)
+    
+    // Combine layers using demo technique
+    let height = volcanic * islandMask + coastal * 0.3 - oceanDepth
+    
     return height
   }
 
@@ -429,7 +565,7 @@ export class AdvancedTerrainGenerator {
     return height + smoothedPlateau * plateaus.height
   }
 
-  private addCoastalFeatures(x: number, y: number, height: number, featureScale: number): number {
+  private addCoastalFeatures(_x: number, _y: number, height: number, _featureScale: number): number {
     // Removed distance-based coastal features to eliminate rings
     // Instead use height-based coastal effects
     if (height > -5 && height < 5) {
@@ -451,18 +587,46 @@ export class AdvancedTerrainGenerator {
     
     // Apply blend mode
     switch (layer.blendMode) {
-      case 'add':
+      case BlendMode.ADD:
         return height + layerValue * layer.weight
-      case 'multiply':
+      case BlendMode.MULTIPLY:
         return height * (1 + layerValue * layer.weight)
-      case 'overlay':
-        return height < 0.5 
-          ? 2 * height * (layerValue * layer.weight)
-          : 1 - 2 * (1 - height) * (1 - layerValue * layer.weight)
-      case 'screen':
+      case BlendMode.OVERLAY:
+        // Enhanced overlay blending inspired by demo techniques
+        const normalizedHeight = Math.max(0, Math.min(1, (height + 200) / 400))
+        const detail = (layerValue * layer.weight) / 20
+        
+        if (normalizedHeight < 0.5) {
+          return height + 2 * normalizedHeight * detail
+        } else {
+          return height + (1 - 2 * (1 - normalizedHeight) * (1 - detail)) * 20
+        }
+      case BlendMode.SCREEN:
         return 1 - (1 - height) * (1 - layerValue * layer.weight)
-      case 'subtract':
+      case BlendMode.SUBTRACT:
         return height - layerValue * layer.weight
+      case BlendMode.MASK_ELEVATION:
+        if (layer.elevationRange) {
+          if (height >= layer.elevationRange.min && height <= layer.elevationRange.max) {
+            return height + layerValue * layer.weight
+          }
+        }
+        return height
+      case BlendMode.MASK_SLOPE:
+        // This blend mode requires slope data, which is not directly available here.
+        // For now, we'll just apply the layer value as is, or handle slope masking separately.
+        // If slope data were available, you'd calculate slope here and check against layer.slopeRange
+        return height + layerValue * layer.weight
+      case BlendMode.VORONOI_ISLANDS:
+        // Generate Voronoi-based island masking
+        const voronoi = this.noiseSystem.voronoiNoise(x, y, 0.4)
+        const islandMask = Math.max(0, 0.6 - voronoi) / 0.6
+        
+        // Apply ocean depth falloff
+        const distance = Math.sqrt(x * x + y * y)
+        const oceanDepth = Math.max(0, (distance - 0.8) * 300)
+        
+        return height * islandMask + layerValue * layer.weight * islandMask - oceanDepth
       default:
         return height + layerValue * layer.weight
     }
@@ -534,6 +698,10 @@ export class AdvancedTerrainGenerator {
 
   public getSeed(): number {
     return this.config.seed
+  }
+
+  public getNoiseSystem(): AdvancedNoiseSystem {
+    return this.noiseSystem
   }
 
   public exportHeightmapAsImage(heightData: Float32Array): string {

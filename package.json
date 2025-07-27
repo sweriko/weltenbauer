@@ -11,17 +11,14 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "simplex-noise": "^4.0.1",
-    "three": "0.176.0",
-    "three-stdlib": "^2.36.0"
+    "simplex-noise": "4.0.3",
+    "three": "0.178.0",
+    "lil-gui": "0.20.0"
   },
   "devDependencies": {
-    "@types/three": "^0.176.0",
-    "@typescript-eslint/eslint-plugin": "^6.0.0",
-    "@typescript-eslint/parser": "^6.0.0",
-    "eslint": "^8.42.0",
-    "typescript": "^5.0.2",
-    "vite": "^6.3.5"
+    "@types/three": "0.178.0",
+    "typescript": "5.8.3",
+    "vite": "7.0.6"
   },
   "keywords": [
     "terrain",

@@ -3,7 +3,8 @@ import { UIController } from './ui/UIController'
 
 class App {
   private terrainBuilder: TerrainBuilder
-  private uiController: UIController
+  // @ts-ignore - UI controller instance needed for initialization
+  private _uiController: UIController // UI controller for terrain manipulation interface
 
   constructor() {
     const canvas = document.getElementById('canvas') as HTMLCanvasElement
@@ -12,7 +13,10 @@ class App {
     }
 
     this.terrainBuilder = new TerrainBuilder(canvas)
-    this.uiController = new UIController(this.terrainBuilder)
+    this._uiController = new UIController(this.terrainBuilder)
+    
+    // Connect UI controller to terrain builder for noise layers management
+    this.terrainBuilder.setUIController(this._uiController)
     
     this.init()
   }

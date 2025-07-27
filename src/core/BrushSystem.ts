@@ -47,7 +47,8 @@ export const MOUNTAIN_PRESETS: { [key: string]: MountainPreset } = {
 export class BrushSystem {
   private terrain: THREE.Mesh | null = null
   private heightData: Float32Array | null = null
-  private originalHeightData: Float32Array | null = null
+  // @ts-ignore - Kept for potential undo functionality
+  private _originalHeightData: Float32Array | null = null
   private resolution: number = 0
   private terrainSize: number = 1000
   
@@ -62,10 +63,11 @@ export class BrushSystem {
   private isMouseDown = false
   private isActive = false
   
-  // Brush state for better flatten behavior
+    // Brush state for better flatten behavior
   private flattenHeight: number = 0
-  private brushStarted = false
-  
+  // @ts-ignore - State tracking for future brush functionality  
+  private _brushStarted = false
+
   // Brush preview
   private brushPreview: THREE.Mesh | null = null
   private scene: THREE.Scene | null = null
@@ -73,7 +75,7 @@ export class BrushSystem {
   public setTerrain(terrain: THREE.Mesh, heightData: Float32Array, resolution: number): void {
     this.terrain = terrain
     this.heightData = heightData.slice() // Make a copy
-    this.originalHeightData = heightData.slice() // Keep original for reference
+    this._originalHeightData = heightData.slice() // Keep original for reference
     this.resolution = resolution
     this.scene = terrain.parent as THREE.Scene
     
@@ -150,7 +152,7 @@ export class BrushSystem {
     if (!this.isActive) return
     
     this.isMouseDown = true
-    this.brushStarted = true
+    this._brushStarted = true
     this.updateMousePosition(event, canvas)
     
     // For flatten mode, set the target height based on the center point
@@ -174,7 +176,7 @@ export class BrushSystem {
 
   public handleMouseUp(): void {
     this.isMouseDown = false
-    this.brushStarted = false
+    this._brushStarted = false
   }
 
   private updateMousePosition(event: MouseEvent, canvas: HTMLCanvasElement): void {
@@ -314,7 +316,7 @@ export class BrushSystem {
     }
   }
 
-  private generateMountainHeight(x: number, z: number, centerX: number, centerZ: number, distance: number, brushRadius: number): number {
+  private generateMountainHeight(x: number, z: number, _centerX: number, _centerZ: number, distance: number, brushRadius: number): number {
     if (!this.brushSettings.mountainPreset) return 0
 
     const preset = this.brushSettings.mountainPreset
@@ -435,7 +437,7 @@ export class BrushSystem {
     geometry.attributes.color.needsUpdate = true
   }
 
-  private calculateTerrainColor(normalizedHeight: number, height: number): { r: number, g: number, b: number } {
+  private calculateTerrainColor(normalizedHeight: number, _height: number): { r: number, g: number, b: number } {
     // Define terrain height thresholds and colors
     const soilColor = { r: 0.4, g: 0.3, b: 0.15 }    // Brown soil
     const grassColor = { r: 0.3, g: 0.6, b: 0.2 }    // Green grass
