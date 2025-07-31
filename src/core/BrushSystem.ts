@@ -1,4 +1,4 @@
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 
 export type BrushMode = 'raise' | 'lower' | 'smooth' | 'flatten' | 'mountain'
 
@@ -63,7 +63,7 @@ export class BrushSystem {
   private isMouseDown = false
   private isActive = false
   
-    // Brush state for better flatten behavior
+  // Brush state for better flatten behavior
   private flattenHeight: number = 0
   // @ts-ignore - State tracking for future brush functionality  
   private _brushStarted = false
@@ -72,12 +72,22 @@ export class BrushSystem {
   private brushPreview: THREE.Mesh | null = null
   private scene: THREE.Scene | null = null
 
+  // Affected region tracking for optimized updates
+  private affectedRegion: { minX: number; maxX: number; minZ: number; maxZ: number } | null = null
+  private isHighResolution: boolean = false
+
   public setTerrain(terrain: THREE.Mesh, heightData: Float32Array, resolution: number): void {
     this.terrain = terrain
     this.heightData = heightData.slice() // Make a copy
     this._originalHeightData = heightData.slice() // Keep original for reference
     this.resolution = resolution
     this.scene = terrain.parent as THREE.Scene
+    
+    // Detect high resolution for optimizations
+    this.isHighResolution = resolution >= 512
+    if (this.isHighResolution) {
+      console.log(`High resolution terrain detected (${resolution}x${resolution}) - brush optimizations enabled`)
+    }
     
     // Calculate terrain size from geometry
     const geometry = terrain.geometry as THREE.PlaneGeometry
@@ -177,6 +187,12 @@ export class BrushSystem {
   public handleMouseUp(): void {
     this.isMouseDown = false
     this._brushStarted = false
+
+    // Ensure normals are computed after brushing stops for high resolution terrains
+    if (this.isHighResolution && this.terrain) {
+      const geometry = this.terrain.geometry as THREE.PlaneGeometry
+      geometry.computeVertexNormals()
+    }
   }
 
   private updateMousePosition(event: MouseEvent, canvas: HTMLCanvasElement): void {
@@ -253,12 +269,19 @@ export class BrushSystem {
     const brushRadius = (this.brushSettings.size / this.terrainSize) * this.resolution
     const baseStrength = this.brushSettings.strength * 1.5 // Base strength multiplier
 
-    for (let z = Math.max(0, centerZ - Math.ceil(brushRadius)); 
-         z < Math.min(this.resolution, centerZ + Math.ceil(brushRadius)); 
-         z++) {
-      for (let x = Math.max(0, centerX - Math.ceil(brushRadius)); 
-           x < Math.min(this.resolution, centerX + Math.ceil(brushRadius)); 
-           x++) {
+    // Track affected region for optimized mesh updates
+    const minX = Math.max(0, centerX - Math.ceil(brushRadius))
+    const maxX = Math.min(this.resolution - 1, centerX + Math.ceil(brushRadius))
+    const minZ = Math.max(0, centerZ - Math.ceil(brushRadius))
+    const maxZ = Math.min(this.resolution - 1, centerZ + Math.ceil(brushRadius))
+
+    // Store affected region for selective mesh updates
+    if (this.isHighResolution) {
+      this.affectedRegion = { minX, maxX, minZ, maxZ }
+    }
+
+    for (let z = minZ; z <= maxZ; z++) {
+      for (let x = minX; x <= maxX; x++) {
         
         const distance = Math.sqrt((x - centerX) ** 2 + (z - centerZ) ** 2)
         if (distance > brushRadius) continue
@@ -391,6 +414,18 @@ export class BrushSystem {
   private updateTerrainMesh(): void {
     if (!this.terrain || !this.heightData) return
 
+    if (this.isHighResolution) {
+      // Use optimized update for high resolution
+      this.updateTerrainMeshOptimized()
+    } else {
+      // Use standard update for lower resolution
+      this.updateTerrainMeshStandard()
+    }
+  }
+
+  private updateTerrainMeshStandard(): void {
+    if (!this.terrain || !this.heightData) return
+
     const geometry = this.terrain.geometry as THREE.PlaneGeometry
     const vertices = geometry.attributes.position.array as Float32Array
 
@@ -402,10 +437,79 @@ export class BrushSystem {
     geometry.attributes.position.needsUpdate = true
     geometry.computeVertexNormals()
     
-    // Update material height range for texture splatting
+    this.updateMaterialHeightRange()
+  }
+
+  private updateTerrainMeshOptimized(): void {
+    if (!this.terrain || !this.heightData) return
+
+    const geometry = this.terrain.geometry as THREE.PlaneGeometry
+    const vertices = geometry.attributes.position.array as Float32Array
+
+    // For high resolution, only update affected region if available
+    if (this.affectedRegion) {
+      this.updateVerticesInRegion(vertices, this.affectedRegion)
+      this.affectedRegion = null // Clear after use
+    } else {
+      // Fallback to chunked full update if no region specified
+      this.updateVerticesChunked(vertices)
+    }
+
+    geometry.attributes.position.needsUpdate = true
+    
+    // Skip expensive normal computation for real-time brushing on high res
+    // We'll compute it on brush release instead
+    if (!this.isMouseDown) {
+      geometry.computeVertexNormals()
+    }
+    
+    this.updateMaterialHeightRange()
+  }
+
+  private updateVerticesInRegion(vertices: Float32Array, region: { minX: number; maxX: number; minZ: number; maxZ: number }): void {
+    if (!this.heightData) return
+
+    const { minX, maxX, minZ, maxZ } = region
+    
+    for (let z = Math.max(0, minZ); z <= Math.min(this.resolution - 1, maxZ); z++) {
+      for (let x = Math.max(0, minX); x <= Math.min(this.resolution - 1, maxX); x++) {
+        const index = z * this.resolution + x
+        vertices[index * 3 + 2] = this.heightData[index]
+      }
+    }
+  }
+
+  private updateVerticesChunked(vertices: Float32Array): void {
+    if (!this.heightData) return
+
+    // Process in chunks to avoid blocking the main thread
+    const chunkSize = 4096
+    let processed = 0
+
+    const processChunk = () => {
+      const end = Math.min(processed + chunkSize, this.heightData!.length)
+      
+      for (let i = processed; i < end; i++) {
+        vertices[i * 3 + 2] = this.heightData![i]
+      }
+      
+      processed = end
+      
+      if (processed < this.heightData!.length) {
+        // Continue processing in next frame
+        requestAnimationFrame(processChunk)
+      }
+    }
+
+    processChunk()
+  }
+
+  private updateMaterialHeightRange(): void {
+    if (!this.terrain || !this.heightData) return
+
+    // Update material height range for texture splatting (avoid spread operator for large arrays)
     if (this.terrain.material && 'uniforms' in this.terrain.material) {
-      const minHeight = Math.min(...this.heightData)
-      const maxHeight = Math.max(...this.heightData)
+      const { minHeight, maxHeight } = this.calculateHeightRange()
       const material = this.terrain.material as THREE.ShaderMaterial
       if (material.uniforms.minHeight && material.uniforms.maxHeight) {
         material.uniforms.minHeight.value = minHeight
@@ -414,15 +518,37 @@ export class BrushSystem {
     }
   }
 
+  private calculateHeightRange(): { minHeight: number; maxHeight: number } {
+    if (!this.heightData || this.heightData.length === 0) {
+      return { minHeight: 0, maxHeight: 0 }
+    }
+
+    let minHeight = Infinity
+    let maxHeight = -Infinity
+
+    // Process in chunks to avoid blocking on very large arrays
+    const chunkSize = 8192
+    for (let start = 0; start < this.heightData.length; start += chunkSize) {
+      const end = Math.min(start + chunkSize, this.heightData.length)
+      
+      for (let i = start; i < end; i++) {
+        const height = this.heightData[i]
+        if (height < minHeight) minHeight = height
+        if (height > maxHeight) maxHeight = height
+      }
+    }
+
+    return { minHeight, maxHeight }
+  }
+
   public updateTerrainColors(): void {
     if (!this.terrain || !this.heightData) return
 
     const geometry = this.terrain.geometry as THREE.PlaneGeometry
     
-    // Update vertex colors based on new heights
+    // Update vertex colors based on new heights (avoid spread operator for large arrays)
     const colors = geometry.attributes.color.array as Float32Array
-    const minHeight = Math.min(...this.heightData)
-    const maxHeight = Math.max(...this.heightData)
+    const { minHeight, maxHeight } = this.calculateHeightRange()
     
     for (let i = 0; i < this.heightData.length; i++) {
       const normalizedHeight = maxHeight > minHeight ? 
@@ -503,6 +629,16 @@ export class BrushSystem {
     // Update brush preview if active but not brushing
     if (this.isActive && !this.isMouseDown) {
       this.updateBrushPreview(camera)
+    }
+  }
+
+  /**
+   * Get performance info for the current terrain
+   */
+  public getPerformanceInfo(): { isHighResolution: boolean; resolution: number } {
+    return {
+      isHighResolution: this.isHighResolution,
+      resolution: this.resolution
     }
   }
 } 

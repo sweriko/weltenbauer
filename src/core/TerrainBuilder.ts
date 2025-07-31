@@ -1,10 +1,10 @@
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import { GUI } from 'lil-gui'
 import { AdvancedTerrainGenerator, TerrainType } from './AdvancedTerrainGenerator'
 import { BrushSystem } from './BrushSystem'
 import { ErosionSystem, ErosionConfig, AdvancedErosionConfig } from './ErosionSystem'
 import { TerrainMaterial } from './TerrainMaterial'
+import { TerrainWorkerMessage, TerrainWorkerResponse } from './TerrainWorker'
 
 export interface TerrainConfig {
   size: number // Size in kilometers
@@ -26,7 +26,7 @@ export class TerrainBuilder {
   private canvas: HTMLCanvasElement
   private scene: THREE.Scene
   private camera: THREE.PerspectiveCamera
-  private renderer: THREE.WebGLRenderer
+  private renderer: THREE.WebGPURenderer
   private controls: OrbitControls
   
   private terrain: THREE.Mesh | null = null
@@ -39,15 +39,15 @@ export class TerrainBuilder {
   private mode: EditorMode = 'orbit'
   private noisePreviewCanvas: HTMLCanvasElement
   private noiseLayersContainer: HTMLDivElement
-  private noiseLayersFolder: any = null
+
   private customLayers: any[] = []
   private baseLayerWeightOverrides: Map<number, number> = new Map()
-  private layerControls: any[] = []
+
   private uiController: any = null
   
   private config: TerrainConfig = {
-    size: 5, // 5km
-    resolution: 256, // Reduced for better performance
+    size: 1, // 1km
+    resolution: 1024, // Standard power of 2 resolution - supports up to 4096x4096 safely
     seed: Math.floor(Math.random() * 1000000),
     // Redesigned advanced terrain controls
     geologicalComplexity: 1.0,
@@ -60,6 +60,14 @@ export class TerrainBuilder {
   }
 
   private updateTimeout: number | null = null
+  private isGenerating: boolean = false
+  private chunkSize: number = 64 // Process terrain in 64x64 chunks to prevent stack overflow
+  
+  // Worker pool for parallel terrain generation
+  private workers: Worker[] = []
+  private workerCount: number = Math.min(navigator.hardwareConcurrency || 4, 8) // Cap at 8 workers
+  private availableWorkers: Worker[] = []
+  private busyWorkers: Set<Worker> = new Set()
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas
@@ -71,7 +79,7 @@ export class TerrainBuilder {
       10000
     )
     
-    this.renderer = new THREE.WebGLRenderer({
+    this.renderer = new THREE.WebGPURenderer({
       canvas: this.canvas,
       antialias: true,
       alpha: false
@@ -93,10 +101,17 @@ export class TerrainBuilder {
     // Create noise layers visualization
     this.noiseLayersContainer = this.createNoiseLayersContainer()
     
-    this.init()
+    // Initialize asynchronously
+    this.init().catch(console.error)
+    
+    // Initialize worker pool
+    this.initializeWorkerPool()
   }
 
-  private init(): void {
+  private async init(): Promise<void> {
+    // Initialize WebGPU renderer
+    await this.renderer.init()
+    
     // Renderer setup
     this.renderer.setSize(window.innerWidth, window.innerHeight)
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -437,240 +452,6 @@ export class TerrainBuilder {
     ctx.putImageData(imageData, 0, 0)
   }
 
-  private updateNoiseLayersPreview(): void {
-    // Get the layers content area
-    const layersContent = document.getElementById('layers-content')
-    if (!layersContent) return
-    
-    // Clear existing layers
-    layersContent.innerHTML = ''
-
-    // Get current terrain type and parameters
-    const geologicalComplexity = this.config.geologicalComplexity
-    const featureScale = this.config.featureScale
-    const terrainType = this.config.terrainType
-    
-    // Get base terrain layers
-    const baseLayers = this.advancedTerrainGenerator.getTerrainTypeLayers(terrainType, geologicalComplexity, featureScale)
-    
-    // Apply weight overrides to base layers to show current state
-    baseLayers.forEach((layer, index) => {
-      if (this.baseLayerWeightOverrides.has(index)) {
-        layer.weight = this.baseLayerWeightOverrides.get(index)!
-      }
-    })
-    
-    // Combine base layers with custom layers
-    const allLayers = [...baseLayers, ...this.customLayers]
-    
-    // Create preview for each layer
-    allLayers.forEach((layer: any, index: number) => {
-      const isCustomLayer = index >= baseLayers.length
-      const layerCard = this.createLayerCard(layer, index, isCustomLayer)
-      layersContent.appendChild(layerCard)
-    })
-    
-    // Add weight summary
-    const weightSummaryCard = this.createWeightSummaryCard(allLayers)
-    layersContent.appendChild(weightSummaryCard)
-    
-    // Add combined result
-    const combinedCard = this.createCombinedResultCard(allLayers)
-    layersContent.appendChild(combinedCard)
-  }
-
-  private createLayerCard(layer: any, index: number, isCustomLayer: boolean = false): HTMLDivElement {
-    const layerCard = document.createElement('div')
-    layerCard.style.background = isCustomLayer ? 'rgba(60, 40, 80, 0.8)' : 'rgba(40, 40, 40, 0.8)'
-    layerCard.style.border = isCustomLayer ? '1px solid #8066cc' : '1px solid #555'
-    layerCard.style.borderRadius = '8px'
-    layerCard.style.padding = '10px'
-    layerCard.style.marginBottom = '10px'
-    layerCard.style.transition = 'all 0.2s ease'
-    layerCard.style.boxSizing = 'border-box'
-    layerCard.style.width = '100%'
-    
-    // Header with layer info and remove button
-    const header = document.createElement('div')
-    header.style.display = 'flex'
-    header.style.justifyContent = 'space-between'
-    header.style.alignItems = 'center'
-    header.style.marginBottom = '8px'
-    
-    const layerInfo = document.createElement('div')
-    
-    const label = document.createElement('div')
-    const layerPrefix = isCustomLayer ? 'Custom' : 'Base'
-    label.textContent = `${index + 1}. ${layer.type.toUpperCase()} (${layerPrefix})`
-    label.style.color = '#fff'
-    label.style.fontSize = '14px'
-    label.style.fontFamily = 'system-ui, -apple-system, sans-serif'
-    label.style.fontWeight = '600'
-    
-    layerInfo.appendChild(label)
-    
-    header.appendChild(layerInfo)
-    
-    // Remove button (only for custom layers)
-    if (isCustomLayer) {
-      const removeBtn = document.createElement('button')
-      removeBtn.textContent = '×'
-      removeBtn.style.background = '#cc4444'
-      removeBtn.style.color = '#fff'
-      removeBtn.style.border = 'none'
-      removeBtn.style.borderRadius = '4px'
-      removeBtn.style.width = '24px'
-      removeBtn.style.height = '24px'
-      removeBtn.style.fontSize = '16px'
-      removeBtn.style.cursor = 'pointer'
-      removeBtn.style.display = 'flex'
-      removeBtn.style.alignItems = 'center'
-      removeBtn.style.justifyContent = 'center'
-      removeBtn.style.transition = 'all 0.2s ease'
-      
-      removeBtn.addEventListener('mouseenter', () => {
-        removeBtn.style.background = '#dd5555'
-        removeBtn.style.transform = 'scale(1.1)'
-      })
-      
-      removeBtn.addEventListener('mouseleave', () => {
-        removeBtn.style.background = '#cc4444'
-        removeBtn.style.transform = 'scale(1)'
-      })
-      
-      removeBtn.addEventListener('click', () => this.removeLayer(index))
-      
-      header.appendChild(removeBtn)
-    }
-    
-    // Weight slider
-    const weightContainer = document.createElement('div')
-    weightContainer.style.marginBottom = '8px'
-    weightContainer.style.width = '100%'
-    weightContainer.style.boxSizing = 'border-box'
-    
-    const weightLabel = document.createElement('div')
-    weightLabel.textContent = `Weight: ${(layer.weight * 100).toFixed(0)}%`
-    weightLabel.style.color = '#ccc'
-    weightLabel.style.fontSize = '12px'
-    weightLabel.style.marginBottom = '4px'
-    weightLabel.style.fontFamily = 'system-ui, -apple-system, sans-serif'
-    
-    const weightSlider = document.createElement('input')
-    weightSlider.type = 'range'
-    weightSlider.min = '0'
-    weightSlider.max = '100'
-    weightSlider.value = (layer.weight * 100).toString()
-    weightSlider.className = 'weight-slider'
-    
-    weightSlider.addEventListener('input', (e) => {
-      const sliderValue = parseInt((e.target as HTMLInputElement).value)
-      const newWeight = sliderValue / 100
-      weightLabel.textContent = `Weight: ${sliderValue}%`
-      console.log(`Slider moved to ${sliderValue}%, weight: ${newWeight}`)
-      // Use simple weight update
-      this.updateLayerWeight(index, newWeight, false)
-    })
-    
-    weightContainer.appendChild(weightLabel)
-    weightContainer.appendChild(weightSlider)
-    
-    // Layer preview canvas - fix aspect ratio
-    const canvas = document.createElement('canvas')
-    canvas.width = 200
-    canvas.height = 50
-    canvas.style.width = '200px'
-    canvas.style.height = '50px'
-    canvas.style.border = '1px solid #666'
-    canvas.style.borderRadius = '6px'
-    canvas.style.display = 'block'
-    canvas.style.background = '#222'
-    canvas.style.margin = '0 auto'
-    
-    // Generate preview for this layer
-    this.generateLayerPreview(canvas, layer)
-    
-    layerCard.appendChild(header)
-    layerCard.appendChild(weightContainer)
-    layerCard.appendChild(canvas)
-    
-    return layerCard
-  }
-
-  private createWeightSummaryCard(layers: any[]): HTMLDivElement {
-    const summaryCard = document.createElement('div')
-    summaryCard.style.background = 'rgba(60, 60, 60, 0.8)'
-    summaryCard.style.border = '1px solid #888'
-    summaryCard.style.borderRadius = '8px'
-    summaryCard.style.padding = '8px'
-    summaryCard.style.marginBottom = '10px'
-    summaryCard.style.boxSizing = 'border-box'
-    summaryCard.style.width = '100%'
-    
-    // Calculate total weight
-    const totalWeight = layers.reduce((sum, layer) => sum + layer.weight, 0)
-    
-    const summaryLabel = document.createElement('div')
-    summaryLabel.textContent = `Total Weight: ${(totalWeight * 100).toFixed(1)}%`
-    summaryLabel.style.color = totalWeight === 1.0 ? '#4CAF50' : '#FFA726'
-    summaryLabel.style.fontSize = '12px'
-    summaryLabel.style.fontFamily = 'system-ui, -apple-system, sans-serif'
-    summaryLabel.style.fontWeight = '600'
-    summaryLabel.style.textAlign = 'center'
-    
-    // Add visual indicator
-    const indicator = document.createElement('div')
-    indicator.style.width = '100%'
-    indicator.style.height = '4px'
-    indicator.style.background = totalWeight === 1.0 ? '#4CAF50' : '#FFA726'
-    indicator.style.borderRadius = '2px'
-    indicator.style.marginTop = '4px'
-    
-    summaryCard.appendChild(summaryLabel)
-    summaryCard.appendChild(indicator)
-    
-    return summaryCard
-  }
-
-  private createCombinedResultCard(layers: any[]): HTMLDivElement {
-    const combinedCard = document.createElement('div')
-    combinedCard.style.background = 'rgba(0, 102, 204, 0.2)'
-    combinedCard.style.border = '2px solid #0066cc'
-    combinedCard.style.borderRadius = '8px'
-    combinedCard.style.padding = '10px'
-    combinedCard.style.marginTop = '16px'
-    combinedCard.style.boxSizing = 'border-box'
-    combinedCard.style.width = '100%'
-    
-    const combinedLabel = document.createElement('div')
-    combinedLabel.textContent = 'COMBINED RESULT'
-    combinedLabel.style.color = '#fff'
-    combinedLabel.style.fontSize = '14px'
-    combinedLabel.style.fontFamily = 'system-ui, -apple-system, sans-serif'
-    combinedLabel.style.fontWeight = '600'
-    combinedLabel.style.marginBottom = '8px'
-    combinedLabel.style.textAlign = 'center'
-    
-    const combinedCanvas = document.createElement('canvas')
-    combinedCanvas.width = 200
-    combinedCanvas.height = 50
-    combinedCanvas.style.width = '200px'
-    combinedCanvas.style.height = '50px'
-    combinedCanvas.style.border = '2px solid #0088ff'
-    combinedCanvas.style.borderRadius = '6px'
-    combinedCanvas.style.display = 'block'
-    combinedCanvas.style.background = '#222'
-    combinedCanvas.style.margin = '0 auto'
-    
-    // Generate combined preview
-    this.generateCombinedLayersPreview(combinedCanvas, layers)
-    
-    combinedCard.appendChild(combinedLabel)
-    combinedCard.appendChild(combinedCanvas)
-    
-    return combinedCard
-  }
-
   public generateLayerPreview(canvas: HTMLCanvasElement, layer: any): void {
     const ctx = canvas.getContext('2d')!
     const imageData = ctx.createImageData(canvas.width, canvas.height)
@@ -688,9 +469,13 @@ export class TerrainBuilder {
       }
     }
 
-    // Find min/max for normalization
-    let min = Math.min(...samples)
-    let max = Math.max(...samples)
+    // Find min/max for normalization (avoid spread operator to prevent stack overflow)
+    let min = Infinity
+    let max = -Infinity
+    for (let i = 0; i < samples.length; i++) {
+      if (samples[i] < min) min = samples[i]
+      if (samples[i] > max) max = samples[i]
+    }
     const range = max - min
 
     // Convert to image data
@@ -708,42 +493,7 @@ export class TerrainBuilder {
     ctx.putImageData(imageData, 0, 0)
   }
 
-  private generateCombinedLayersPreview(canvas: HTMLCanvasElement, layers: any[]): void {
-    const ctx = canvas.getContext('2d')!
-    const imageData = ctx.createImageData(canvas.width, canvas.height)
-    const data = imageData.data
 
-    // Sample the combined layers across the preview area
-    const samples: number[] = []
-    for (let y = 0; y < canvas.height; y++) {
-      for (let x = 0; x < canvas.width; x++) {
-        const nx = (x / canvas.width) * 2 - 1
-        const ny = (y / canvas.height) * 2 - 1
-        
-        const combined = this.advancedTerrainGenerator.getNoiseSystem().multiScaleNoise(nx, ny, layers)
-        samples.push(combined)
-      }
-    }
-
-    // Find min/max for normalization
-    let min = Math.min(...samples)
-    let max = Math.max(...samples)
-    const range = max - min
-
-    // Convert to image data
-    for (let i = 0; i < samples.length; i++) {
-      const normalized = range > 0 ? (samples[i] - min) / range : 0.5
-      const value = Math.floor(Math.max(0, Math.min(1, normalized)) * 255)
-      
-      const pixelIndex = i * 4
-      data[pixelIndex] = value
-      data[pixelIndex + 1] = value
-      data[pixelIndex + 2] = value
-      data[pixelIndex + 3] = 255
-    }
-
-    ctx.putImageData(imageData, 0, 0)
-  }
 
   public showAddLayerDialog(): void {
     // Create modal overlay
@@ -894,7 +644,7 @@ export class TerrainBuilder {
     this.normalizeAllWeights()
     
     // Regenerate terrain (this will trigger GUI update)
-    this.generateTerrain()
+    this.generateTerrain().catch(console.error)
   }
 
   private normalizeAllWeights(): void {
@@ -949,7 +699,7 @@ export class TerrainBuilder {
       this.normalizeAllWeights()
       
       // Regenerate terrain (this will trigger GUI update)
-      this.generateTerrain()
+      this.generateTerrain().catch(console.error)
     }
   }
 
@@ -973,138 +723,13 @@ export class TerrainBuilder {
     
     // Force terrain regeneration with updated weights (unless we're batching)
     if (!skipRegeneration) {
-      this.generateTerrain()
+      this.generateTerrain().catch(console.error)
     }
   }
 
-  private updateLayerWeightNormalized(index: number, newWeight: number): void {
-    // Get current layers
-    const geologicalComplexity = this.config.geologicalComplexity
-    const featureScale = this.config.featureScale
-    const terrainType = this.config.terrainType
-    const baseLayers = this.advancedTerrainGenerator.getTerrainTypeLayers(terrainType, geologicalComplexity, featureScale)
-    
-    // Apply existing weight overrides to base layers
-    baseLayers.forEach((layer, layerIndex) => {
-      if (this.baseLayerWeightOverrides.has(layerIndex)) {
-        layer.weight = this.baseLayerWeightOverrides.get(layerIndex)!
-      }
-    })
-    
-    const allLayers = [...baseLayers, ...this.customLayers]
-    const totalLayers = allLayers.length
-    
-    console.log('Before normalization:', allLayers.map(l => l.weight))
-    
-    if (totalLayers <= 1) {
-      // If only one layer, set it to 100%
-      this.updateLayerWeight(index, 1.0)
-      this.updateNoiseLayersPreview()
-      return
-    }
-    
-    // Calculate what the other layers should sum to
-    const remainingWeight = 1.0 - newWeight
-    
-    // Get current weights of all OTHER layers
-    let otherLayersCurrentWeight = 0
-    for (let i = 0; i < totalLayers; i++) {
-      if (i !== index) {
-        otherLayersCurrentWeight += allLayers[i].weight
-      }
-    }
-    
-    console.log(`Setting layer ${index} to ${newWeight}, remaining: ${remainingWeight}, others current: ${otherLayersCurrentWeight}`)
-    
-    // Update the target layer (skip regeneration during batch update)
-    this.updateLayerWeight(index, newWeight, true)
-    
-    // Redistribute remaining weight proportionally among other layers
-    if (otherLayersCurrentWeight > 0 && remainingWeight > 0) {
-      for (let i = 0; i < totalLayers; i++) {
-        if (i !== index) {
-          const currentWeight = allLayers[i].weight
-          const proportion = currentWeight / otherLayersCurrentWeight
-          const newLayerWeight = remainingWeight * proportion
-          console.log(`Layer ${i}: ${currentWeight} -> ${newLayerWeight} (prop: ${proportion})`)
-          this.updateLayerWeight(i, newLayerWeight, true)
-        }
-      }
-    } else if (remainingWeight > 0) {
-      // If other layers have zero weight, distribute equally
-      const equalWeight = remainingWeight / (totalLayers - 1)
-      console.log(`Distributing equally: ${equalWeight} to each other layer`)
-      for (let i = 0; i < totalLayers; i++) {
-        if (i !== index) {
-          this.updateLayerWeight(i, equalWeight, true)
-        }
-      }
-    }
-    
-    // Now regenerate terrain once with all updated weights
-    this.generateTerrain()
-    
-    // Update the UI to reflect all the new weights
-    this.updateNoiseLayersPreview()
-  }
 
-    private applyCustomLayers(baseHeightData: Float32Array): Float32Array {
-    const { resolution } = this.config
-    const result = new Float32Array(baseHeightData.length)
-    
-    // Calculate total base layer weight modifier
-    let baseWeightMultiplier = 1.0
-    if (this.baseLayerWeightOverrides.size > 0) {
-      // Get the original base layers to find original total weight
-      const geologicalComplexity = this.config.geologicalComplexity
-      const featureScale = this.config.featureScale
-      const terrainType = this.config.terrainType
-      const originalBaseLayers = this.advancedTerrainGenerator.getTerrainTypeLayers(terrainType, geologicalComplexity, featureScale)
-      
-      const originalTotalWeight = originalBaseLayers.reduce((sum, layer) => sum + layer.weight, 0)
-      
-      // Calculate new total weight with overrides
-      let newTotalWeight = 0
-      originalBaseLayers.forEach((layer, index) => {
-        if (this.baseLayerWeightOverrides.has(index)) {
-          newTotalWeight += this.baseLayerWeightOverrides.get(index)!
-        } else {
-          newTotalWeight += layer.weight
-        }
-      })
-      
-      // Calculate the multiplier to scale the existing terrain
-      baseWeightMultiplier = newTotalWeight / originalTotalWeight
-      console.log(`Base weight multiplier: ${baseWeightMultiplier} (${newTotalWeight}/${originalTotalWeight})`)
-    }
-    
-    // Start with scaled base terrain
-    for (let i = 0; i < baseHeightData.length; i++) {
-      result[i] = baseHeightData[i] * baseWeightMultiplier
-    }
-    
-    // Apply each custom layer
-    for (const layer of this.customLayers) {
-      console.log(`Applying custom layer with weight: ${layer.weight}`)
-      for (let y = 0; y < resolution; y++) {
-        for (let x = 0; x < resolution; x++) {
-          const index = y * resolution + x
-          
-          // Transform coordinates to noise space
-          const nx = (x / (resolution - 1)) * 2 - 1
-          const ny = (y / (resolution - 1)) * 2 - 1
-          
-          // Generate noise for this layer
-          const noise = this.advancedTerrainGenerator.getNoiseSystem().generateNoise(nx, ny, layer.type, layer.config)
-          
-          // Apply layer with its weight
-          result[index] += noise * layer.weight
-        }
-      }
-    }
-    
-    return result
-  }
+
+
 
   private applyBaseLayerWeightOverrides(): void {
     // This method temporarily modifies the base layer weights for terrain generation
@@ -1112,66 +737,9 @@ export class TerrainBuilder {
     // We'll handle the overrides in the custom layers application instead
   }
 
-  private applyWeightOverridesToTerrainGenerator(): void {
-    // Temporarily modify the terrain generator's layer weights
-    const geologicalComplexity = this.config.geologicalComplexity
-    const featureScale = this.config.featureScale
-    const terrainType = this.config.terrainType
-    
-    // Get fresh layers from the generator
-    const baseLayers = this.advancedTerrainGenerator.getTerrainTypeLayers(terrainType, geologicalComplexity, featureScale)
-    
-    // Apply our weight overrides
-    baseLayers.forEach((layer, index) => {
-      if (this.baseLayerWeightOverrides.has(index)) {
-        const newWeight = this.baseLayerWeightOverrides.get(index)!
-        console.log(`Overriding layer ${index} weight: ${layer.weight} -> ${newWeight}`)
-        layer.weight = newWeight
-      }
-    })
-    
-    // Clear existing layers and add the modified ones
-    const config = this.advancedTerrainGenerator.getConfig()
-    config.layers = baseLayers.map(layer => ({
-      type: layer.type,
-      config: layer.config,
-      weight: layer.weight,
-      blendMode: 'add' as any
-    }))
-    this.advancedTerrainGenerator.updateConfig(config)
-  }
 
-  private applyCustomLayersOnly(baseHeightData: Float32Array): Float32Array {
-    const { resolution } = this.config
-    const result = new Float32Array(baseHeightData.length)
-    
-    // Start with base terrain as-is
-    for (let i = 0; i < baseHeightData.length; i++) {
-      result[i] = baseHeightData[i]
-    }
-    
-    // Apply each custom layer
-    for (const layer of this.customLayers) {
-      console.log(`Applying custom layer with weight: ${layer.weight}`)
-      for (let y = 0; y < resolution; y++) {
-        for (let x = 0; x < resolution; x++) {
-          const index = y * resolution + x
-          
-          // Transform coordinates to noise space
-          const nx = (x / (resolution - 1)) * 2 - 1
-          const ny = (y / (resolution - 1)) * 2 - 1
-          
-          // Generate noise for this layer
-          const noise = this.advancedTerrainGenerator.getNoiseSystem().generateNoise(nx, ny, layer.type, layer.config)
-          
-          // Apply layer with its weight
-          result[index] += noise * layer.weight
-        }
-      }
-         }
-     
-     return result
-   }
+
+
 
   private applyLayerAdjustments(baseHeightData: Float32Array): Float32Array {
     const { resolution } = this.config
@@ -1199,9 +767,9 @@ export class TerrainBuilder {
         for (let x = 0; x < resolution; x++) {
           const index = y * resolution + x
           
-          // Transform coordinates to noise space
-          const nx = (x / (resolution - 1)) * 2 - 1
-          const ny = (y / (resolution - 1)) * 2 - 1
+          // Transform coordinates to noise space with slight offset to avoid center artifacts
+          const nx = (x / (resolution - 1)) * 2 - 1 + 0.001
+          const ny = (y / (resolution - 1)) * 2 - 1 + 0.001
           
           // Generate noise for this layer
           const noise = this.advancedTerrainGenerator.getNoiseSystem().generateNoise(nx, ny, layer.type, layer.config)
@@ -1215,7 +783,20 @@ export class TerrainBuilder {
     return result
   }
 
-  public generateTerrain(): void {
+  public async generateTerrain(): Promise<void> {
+    // Prevent multiple simultaneous generations
+    if (this.isGenerating) {
+      return
+    }
+    this.isGenerating = true
+
+    // Start progress tracking
+    if (this.uiController && this.uiController.getProgressOverlay) {
+      const progressOverlay = this.uiController.getProgressOverlay()
+      progressOverlay.startTask('terrain-generation', 'Generating Terrain', 'Initializing terrain generation...')
+    }
+
+    try {
     // Remove existing terrain with proper cleanup
     if (this.terrain) {
       this.scene.remove(this.terrain)
@@ -1238,7 +819,7 @@ export class TerrainBuilder {
     let heightData: Float32Array
 
     if (this.config.advancedMode) {
-      // Use advanced terrain generator
+        // Use advanced terrain generator with chunked processing
       this.advancedTerrainGenerator.updateConfig({
         size: this.config.size,
         resolution: this.config.resolution,
@@ -1252,16 +833,428 @@ export class TerrainBuilder {
       // Apply base layer weight overrides before generating terrain
       this.applyBaseLayerWeightOverrides()
       
-      heightData = this.advancedTerrainGenerator.generateTerrain(this.config.terrainType)
+        // Use chunked generation for high resolutions to prevent stack overflow
+        if (this.config.resolution >= 512) {
+          if (this.uiController && this.uiController.getProgressOverlay) {
+            const progressOverlay = this.uiController.getProgressOverlay()
+            progressOverlay.updateTask('terrain-generation', 10, 'Using chunked generation for high resolution...')
+          }
+          heightData = await this.generateTerrainChunked(this.config.terrainType)
+        } else {
+          if (this.uiController && this.uiController.getProgressOverlay) {
+            const progressOverlay = this.uiController.getProgressOverlay()
+            progressOverlay.updateTask('terrain-generation', 20, 'Generating terrain with advanced noise system...')
+          }
+          heightData = this.advancedTerrainGenerator.generateTerrain(this.config.terrainType)
+        }
     } else {
       // Basic mode not supported anymore - use advanced with default settings
+        if (this.config.resolution >= 512) {
+          heightData = await this.generateTerrainChunked(this.config.terrainType)
+        } else {
       heightData = this.advancedTerrainGenerator.generateTerrain(this.config.terrainType)
+        }
     }
 
     // Apply weight adjustments and custom layers
     if (this.customLayers.length > 0 || this.baseLayerWeightOverrides.size > 0) {
-      heightData = this.applyLayerAdjustments(heightData)
+      if (this.uiController && this.uiController.getProgressOverlay) {
+        const progressOverlay = this.uiController.getProgressOverlay()
+        progressOverlay.updateTask('terrain-generation', 80, 'Applying layer adjustments...')
+      }
+      
+      if (this.config.resolution >= 512) {
+        heightData = await this.applyLayerAdjustmentsChunked(heightData)
+      } else {
+        heightData = this.applyLayerAdjustments(heightData)
+      }
     }
+
+    // Create terrain geometry
+    if (this.uiController && this.uiController.getProgressOverlay) {
+      const progressOverlay = this.uiController.getProgressOverlay()
+      progressOverlay.updateTask('terrain-generation', 90, 'Creating terrain mesh...')
+    }
+    
+    await this.createTerrainMesh(heightData)
+    
+    // Complete the progress
+    if (this.uiController && this.uiController.getProgressOverlay) {
+      const progressOverlay = this.uiController.getProgressOverlay()
+      progressOverlay.completeTask('terrain-generation')
+    }
+    } finally {
+      this.isGenerating = false
+    }
+  }
+
+  /**
+   * Generate terrain in chunks using parallel workers for multi-core processing
+   */
+  private async generateTerrainChunked(type: TerrainType): Promise<Float32Array> {
+    const { resolution } = this.config
+    const heightData = new Float32Array(resolution * resolution)
+    
+    const chunksX = Math.ceil(resolution / this.chunkSize)
+    const chunksY = Math.ceil(resolution / this.chunkSize)
+    const totalChunks = chunksX * chunksY
+
+    if (this.uiController && this.uiController.getProgressOverlay) {
+      const progressOverlay = this.uiController.getProgressOverlay()
+      progressOverlay.updateTask('terrain-generation', 15, 
+        `Processing ${totalChunks} chunks (${this.chunkSize}x${this.chunkSize} each) using ${this.workers.length} workers...`)
+    }
+
+    // Fall back to single-threaded if no workers available
+    if (this.workers.length === 0) {
+      return this.generateTerrainChunkedSingleThreaded(type)
+    }
+
+    return this.generateTerrainChunkedParallel(type, chunksX, chunksY, totalChunks, heightData)
+  }
+
+  /**
+   * Parallel terrain generation using worker pool
+   */
+  private async generateTerrainChunkedParallel(
+    type: TerrainType, 
+    chunksX: number, 
+    chunksY: number, 
+    totalChunks: number, 
+    heightData: Float32Array
+  ): Promise<Float32Array> {
+    const { resolution } = this.config
+    let processedChunks = 0
+    const pendingChunks: Promise<void>[] = []
+
+    // Create chunk processing promises
+    for (let chunkY = 0; chunkY < chunksY; chunkY++) {
+      for (let chunkX = 0; chunkX < chunksX; chunkX++) {
+        const startX = chunkX * this.chunkSize
+        const startY = chunkY * this.chunkSize
+        const endX = Math.min(startX + this.chunkSize, resolution)
+        const endY = Math.min(startY + this.chunkSize, resolution)
+        
+        const chunkPromise = this.processTerrainChunkWithWorker(
+          type, startX, startY, endX, endY, heightData, `${chunkX}-${chunkY}`
+        ).then(() => {
+          processedChunks++
+          
+          // Update progress periodically
+          if (processedChunks % Math.max(1, Math.floor(totalChunks / 20)) === 0) {
+            const progress = 15 + (processedChunks / totalChunks * 60)
+            
+            if (this.uiController && this.uiController.getProgressOverlay) {
+              const progressOverlay = this.uiController.getProgressOverlay()
+              progressOverlay.updateTask('terrain-generation', progress, 
+                `Processed ${processedChunks}/${totalChunks} chunks...`)
+            }
+          }
+        })
+        
+        pendingChunks.push(chunkPromise)
+      }
+    }
+
+    // Wait for all chunks to complete
+    await Promise.all(pendingChunks)
+    
+    if (this.uiController && this.uiController.getProgressOverlay) {
+      const progressOverlay = this.uiController.getProgressOverlay()
+      progressOverlay.updateTask('terrain-generation', 75, 'Parallel terrain generation complete!')
+    }
+    
+    return heightData
+  }
+
+  /**
+   * Process a single chunk using a worker from the pool
+   */
+  private async processTerrainChunkWithWorker(
+    type: TerrainType,
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    heightData: Float32Array,
+    chunkId: string
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      // Wait for an available worker
+      const tryGetWorker = () => {
+        const worker = this.getAvailableWorker()
+        
+        if (worker) {
+          this.busyWorkers.add(worker)
+          
+          // Set up message handler for this chunk
+          const handleMessage = (event: MessageEvent<TerrainWorkerResponse>) => {
+            if (event.data.data.chunkId === chunkId) {
+              worker.removeEventListener('message', handleMessage)
+              worker.removeEventListener('error', handleError)
+              
+              if (event.data.type === 'chunkComplete') {
+                // Copy worker result back to main height data
+                const { heightData: chunkData, startX: chunkStartX, startY: chunkStartY, endX: chunkEndX, endY: chunkEndY } = event.data.data
+                
+                if (chunkData && chunkStartX !== undefined && chunkStartY !== undefined && chunkEndX !== undefined && chunkEndY !== undefined) {
+                  const chunkWidth = chunkEndX - chunkStartX
+                  
+                  for (let localY = 0; localY < chunkEndY - chunkStartY; localY++) {
+                    for (let localX = 0; localX < chunkWidth; localX++) {
+                      const globalX = chunkStartX + localX
+                      const globalY = chunkStartY + localY
+                      const globalIndex = globalY * this.config.resolution + globalX
+                      const localIndex = localY * chunkWidth + localX
+                      
+                      heightData[globalIndex] = chunkData[localIndex]
+                    }
+                  }
+                  
+                  this.releaseWorker(worker)
+                  resolve()
+                } else {
+                  this.releaseWorker(worker)
+                  reject(new Error('Invalid chunk data received from worker'))
+                }
+              } else if (event.data.type === 'error') {
+                this.releaseWorker(worker)
+                reject(new Error(`Worker error: ${event.data.data.error || 'Unknown worker error'}`))
+              }
+            }
+          }
+          
+          const handleError = (error: ErrorEvent) => {
+            worker.removeEventListener('message', handleMessage)
+            worker.removeEventListener('error', handleError)
+            this.releaseWorker(worker)
+            reject(error)
+          }
+          
+          worker.addEventListener('message', handleMessage)
+          worker.addEventListener('error', handleError)
+          
+          // Send work to the worker
+          const message: TerrainWorkerMessage = {
+            type: 'processChunk',
+            data: {
+              chunkId,
+              startX,
+              startY,
+              endX,
+              endY,
+              resolution: this.config.resolution,
+              terrainType: type,
+              config: this.advancedTerrainGenerator.getConfig()
+            }
+          }
+          
+          worker.postMessage(message)
+        } else {
+          // No worker available, wait a bit and try again
+          setTimeout(tryGetWorker, 10)
+        }
+      }
+      
+      tryGetWorker()
+    })
+  }
+
+  /**
+   * Fallback single-threaded terrain generation
+   */
+  private async generateTerrainChunkedSingleThreaded(type: TerrainType): Promise<Float32Array> {
+    const { resolution } = this.config
+    const heightData = new Float32Array(resolution * resolution)
+    
+    const chunksX = Math.ceil(resolution / this.chunkSize)
+    const chunksY = Math.ceil(resolution / this.chunkSize)
+    let processedChunks = 0
+    const totalChunks = chunksX * chunksY
+
+    for (let chunkY = 0; chunkY < chunksY; chunkY++) {
+      for (let chunkX = 0; chunkX < chunksX; chunkX++) {
+        const startX = chunkX * this.chunkSize
+        const startY = chunkY * this.chunkSize
+        const endX = Math.min(startX + this.chunkSize, resolution)
+        const endY = Math.min(startY + this.chunkSize, resolution)
+        
+        await this.processTerrainChunk(heightData, type, startX, startY, endX, endY)
+        
+        processedChunks++
+        
+        if (processedChunks % 4 === 0) {
+          const progress = 15 + (processedChunks / totalChunks * 60)
+          
+          if (this.uiController && this.uiController.getProgressOverlay) {
+            const progressOverlay = this.uiController.getProgressOverlay()
+            progressOverlay.updateTask('terrain-generation', progress, `Processed ${processedChunks}/${totalChunks} chunks (single-threaded)...`)
+          }
+          
+          await this.yieldControl()
+        }
+      }
+    }
+    
+    return heightData
+  }
+
+  /**
+   * Process a single terrain chunk
+   */
+  private async processTerrainChunk(
+    heightData: Float32Array, 
+    type: TerrainType, 
+    startX: number, 
+    startY: number, 
+    endX: number, 
+    endY: number
+  ): Promise<void> {
+    const { resolution } = this.config
+    
+    // Get terrain generation parameters
+    const geologicalComplexity = this.config.geologicalComplexity ?? 0.8
+    const domainWarping = this.config.domainWarping ?? 0.5
+    const reliefAmplitude = this.config.reliefAmplitude ?? 1.0
+    const featureScale = this.config.featureScale ?? 1.5
+    
+    // Generate base layers based on terrain type
+    const layers = this.advancedTerrainGenerator.getTerrainTypeLayers(type, geologicalComplexity, featureScale)
+    
+    for (let y = startY; y < endY; y++) {
+      for (let x = startX; x < endX; x++) {
+        const index = y * resolution + x
+        
+        // Improved coordinate transformation with slight offset to avoid center artifacts
+        const nx = (x / (resolution - 1)) * 2 - 1 + 0.001
+        const ny = (y / (resolution - 1)) * 2 - 1 + 0.001
+        
+        // Advanced domain warping controlled by domainWarping parameter
+        const warpStrength = domainWarping * 0.6
+        const warpScale = 0.3 + featureScale * 0.4
+        
+        const warpX = this.advancedTerrainGenerator.getNoiseSystem().perlin(nx * warpScale + 100, ny * warpScale + 200) * warpStrength
+        const warpY = this.advancedTerrainGenerator.getNoiseSystem().perlin(nx * warpScale + 300, ny * warpScale + 400) * warpStrength
+        
+        // Apply secondary warping for ultra-natural terrain when domain warping is high
+        let warpedX = nx + warpX
+        let warpedY = ny + warpY
+        
+        if (domainWarping > 0.7) {
+          const secondaryWarp = (domainWarping - 0.7) * 0.3
+          const secondaryScale = warpScale * 2
+          warpedX += this.advancedTerrainGenerator.getNoiseSystem().perlin(warpedX * secondaryScale + 500, warpedY * secondaryScale + 600) * secondaryWarp
+          warpedY += this.advancedTerrainGenerator.getNoiseSystem().perlin(warpedX * secondaryScale + 700, warpedY * secondaryScale + 800) * secondaryWarp
+        }
+        
+        // Generate terrain height using multi-scale composition
+        let height = this.advancedTerrainGenerator.getNoiseSystem().multiScaleNoise(warpedX, warpedY, layers)
+        
+        // Apply geological features
+        const config = this.advancedTerrainGenerator.getConfig()
+        if (config.mountainRanges.enabled) {
+          height += this.generateMountainRanges(warpedX, warpedY, featureScale) * geologicalComplexity
+        }
+        
+        if (config.valleys.enabled) {
+          height = this.carveValleys(warpedX, warpedY, height, geologicalComplexity * 0.7, featureScale)
+        }
+        
+        if (config.plateaus.enabled) {
+          height = this.addPlateaus(warpedX, warpedY, height, featureScale)
+        }
+        
+        if (config.coastalFeatures.enabled) {
+          height = this.addCoastalFeatures(warpedX, warpedY, height, featureScale)
+        }
+        
+        // Intelligent micro-detail that scales with geological complexity and feature scale
+        const microDetailFreq = 6 + featureScale * 4
+        const microDetailAmp = (1 + geologicalComplexity) * featureScale * 0.8
+        const microDetail = this.advancedTerrainGenerator.getNoiseSystem().perlin(warpedX * microDetailFreq, warpedY * microDetailFreq) * microDetailAmp
+        height += microDetail
+        
+        // Apply master relief amplitude scaling
+        height *= reliefAmplitude
+        
+        heightData[index] = height
+      }
+    }
+  }
+
+  /**
+   * Apply layer adjustments in chunks to prevent stack overflow
+   */
+  private async applyLayerAdjustmentsChunked(baseHeightData: Float32Array): Promise<Float32Array> {
+    const { resolution } = this.config
+    const result = new Float32Array(baseHeightData.length)
+    
+    console.log('Applying layer adjustments in chunks...')
+    
+    const chunksX = Math.ceil(resolution / this.chunkSize)
+    const chunksY = Math.ceil(resolution / this.chunkSize)
+    let processedChunks = 0
+    const totalChunks = chunksX * chunksY
+
+    // Apply a simple scaling factor for base layer weight changes
+    let baseScalingFactor = 1.0
+    if (this.baseLayerWeightOverrides.size > 0) {
+      const weights = Array.from(this.baseLayerWeightOverrides.values())
+      const avgWeight = weights.reduce((sum, w) => sum + w, 0) / weights.length
+      baseScalingFactor = avgWeight * 2
+    }
+    
+    for (let chunkY = 0; chunkY < chunksY; chunkY++) {
+      for (let chunkX = 0; chunkX < chunksX; chunkX++) {
+        // Calculate chunk bounds
+        const startX = chunkX * this.chunkSize
+        const startY = chunkY * this.chunkSize
+        const endX = Math.min(startX + this.chunkSize, resolution)
+        const endY = Math.min(startY + this.chunkSize, resolution)
+        
+        // Process this chunk
+        for (let y = startY; y < endY; y++) {
+          for (let x = startX; x < endX; x++) {
+            const index = y * resolution + x
+            
+            // Start with scaled base terrain
+            result[index] = baseHeightData[index] * baseScalingFactor
+            
+            // Apply each custom layer
+            for (const layer of this.customLayers) {
+              // Transform coordinates to noise space with slight offset to avoid center artifacts
+              const nx = (x / (resolution - 1)) * 2 - 1 + 0.001
+              const ny = (y / (resolution - 1)) * 2 - 1 + 0.001
+              
+              // Generate noise for this layer
+              const noise = this.advancedTerrainGenerator.getNoiseSystem().generateNoise(nx, ny, layer.type, layer.config)
+              
+              // Apply layer with its weight
+              result[index] += noise * layer.weight
+            }
+          }
+        }
+        
+        processedChunks++
+        
+        // Yield control every few chunks
+        if (processedChunks % 8 === 0) {
+          const progress = (processedChunks / totalChunks * 100).toFixed(1)
+          console.log(`Layer adjustment progress: ${progress}%`)
+          await this.yieldControl()
+        }
+      }
+    }
+    
+    console.log('Layer adjustments complete!')
+    return result
+  }
+
+  /**
+   * Create the terrain mesh from height data (with chunked processing for high resolutions)
+   */
+  private async createTerrainMesh(heightData: Float32Array): Promise<void> {
+    console.log('Creating terrain mesh...')
 
     // Create terrain geometry
     const geometry = new THREE.PlaneGeometry(
@@ -1271,18 +1264,22 @@ export class TerrainBuilder {
       this.config.resolution - 1
     )
 
-    // Apply height data to vertices
-    const vertices = geometry.attributes.position.array as Float32Array
-    for (let i = 0; i < heightData.length; i++) {
-      vertices[i * 3 + 2] = heightData[i] // Z coordinate (height)
-    }
+    // Apply height data to vertices in chunks to prevent stack overflow
+    await this.applyHeightDataToVertices(geometry, heightData)
 
     geometry.attributes.position.needsUpdate = true
+    
+    // Compute normals in chunks for high resolutions
+    if (this.config.resolution > 1024) {
+      console.log('Computing normals for high resolution mesh...')
+      await this.yieldControl()
+    }
     geometry.computeVertexNormals()
 
-    // Update height range for terrain material
-    const minHeight = Math.min(...heightData)
-    const maxHeight = Math.max(...heightData)
+    // Calculate min/max height using loop instead of spread operator to prevent stack overflow
+    const { minHeight, maxHeight, avgHeight } = this.calculateHeightStats(heightData)
+    console.log(`Height range: ${minHeight.toFixed(2)} to ${maxHeight.toFixed(2)}, avg: ${avgHeight.toFixed(2)}`)
+    
     this.terrainMaterial.updateHeightRange(minHeight, maxHeight)
 
     // Get the material
@@ -1293,8 +1290,6 @@ export class TerrainBuilder {
     this.terrain.rotation.x = -Math.PI / 2
     
     // Center the terrain properly relative to the grid
-    // Calculate the average height to center the terrain vertically
-    const avgHeight = heightData.reduce((sum, h) => sum + h, 0) / heightData.length
     this.terrain.position.y = -avgHeight * 0.5 // Center terrain around average height
     
     this.terrain.receiveShadow = true
@@ -1315,6 +1310,137 @@ export class TerrainBuilder {
     if (this.uiController) {
       this.updateNoiseLayersGUI()
     }
+    
+    console.log('Terrain mesh created successfully!')
+  }
+
+  /**
+   * Apply height data to vertices in chunks to prevent stack overflow
+   */
+  private async applyHeightDataToVertices(geometry: THREE.PlaneGeometry, heightData: Float32Array): Promise<void> {
+    const vertices = geometry.attributes.position.array as Float32Array
+    const chunkSize = 8192 // Process 8K vertices at a time
+    
+    console.log(`Applying height data to ${heightData.length} vertices in chunks of ${chunkSize}...`)
+    
+    for (let start = 0; start < heightData.length; start += chunkSize) {
+      const end = Math.min(start + chunkSize, heightData.length)
+      
+      // Apply heights for this chunk
+      for (let i = start; i < end; i++) {
+        vertices[i * 3 + 2] = heightData[i] // Z coordinate (height)
+      }
+      
+      // Yield control every chunk to prevent blocking
+      if (start > 0 && start % (chunkSize * 4) === 0) {
+        const progress = ((start / heightData.length) * 100).toFixed(1)
+        console.log(`Vertex processing progress: ${progress}%`)
+        await this.yieldControl()
+      }
+    }
+    
+    console.log('Height data applied to vertices successfully!')
+  }
+
+  /**
+   * Calculate height statistics without using spread operator (prevents stack overflow)
+   */
+  private calculateHeightStats(heightData: Float32Array): { minHeight: number; maxHeight: number; avgHeight: number } {
+    let minHeight = Infinity
+    let maxHeight = -Infinity
+    let sum = 0
+    
+    // Process in chunks to prevent blocking on very large arrays
+    const chunkSize = 16384
+    for (let start = 0; start < heightData.length; start += chunkSize) {
+      const end = Math.min(start + chunkSize, heightData.length)
+      
+      for (let i = start; i < end; i++) {
+        const height = heightData[i]
+        if (height < minHeight) minHeight = height
+        if (height > maxHeight) maxHeight = height
+        sum += height
+      }
+    }
+    
+    const avgHeight = sum / heightData.length
+    return { minHeight, maxHeight, avgHeight }
+  }
+
+  /**
+   * Yield control back to the browser to prevent blocking
+   */
+  private yieldControl(): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, 0))
+  }
+
+  // Worker Pool Management
+  private initializeWorkerPool(): void {
+    console.log(`Initializing ${this.workerCount} terrain workers for parallel processing`)
+    
+    for (let i = 0; i < this.workerCount; i++) {
+      try {
+        const worker = new Worker(new URL('./TerrainWorker.ts', import.meta.url), { type: 'module' })
+        this.workers.push(worker)
+        this.availableWorkers.push(worker)
+      } catch (error) {
+        console.warn('Failed to create terrain worker:', error)
+        // Fallback to single-threaded processing if workers fail
+        this.workerCount = 0
+        break
+      }
+    }
+    
+    if (this.workers.length === 0) {
+      console.warn('No workers available, falling back to single-threaded processing')
+    }
+  }
+
+  private getAvailableWorker(): Worker | null {
+    return this.availableWorkers.pop() || null
+  }
+
+  private releaseWorker(worker: Worker): void {
+    if (this.busyWorkers.has(worker)) {
+      this.busyWorkers.delete(worker)
+      this.availableWorkers.push(worker)
+    }
+  }
+
+  private destroyWorkerPool(): void {
+    this.workers.forEach(worker => worker.terminate())
+    this.workers = []
+    this.availableWorkers = []
+    this.busyWorkers.clear()
+  }
+
+  // Helper methods for terrain generation (duplicated to avoid dependency on AdvancedTerrainGenerator internals)
+  private generateMountainRanges(x: number, y: number, featureScale: number): number {
+    // Simplified mountain range generation
+    const frequency = 0.5 / featureScale
+    const amplitude = 100
+    return this.advancedTerrainGenerator.getNoiseSystem().perlin(x * frequency, y * frequency) * amplitude
+  }
+
+  private carveValleys(x: number, y: number, height: number, valleyIntensity: number, featureScale: number): number {
+    const frequency = 0.3 / featureScale
+    const amplitude = 50
+    const valley = this.advancedTerrainGenerator.getNoiseSystem().perlin(x * frequency, y * frequency) * amplitude
+    return height - Math.max(0, -valley) * valleyIntensity
+  }
+
+  private addPlateaus(x: number, y: number, height: number, featureScale: number): number {
+    const plateauMask = this.advancedTerrainGenerator.getNoiseSystem().voronoiNoise(x, y, 0.4 / featureScale)
+    const smoothedPlateau = Math.pow(Math.max(0, 0.5 - plateauMask), 2.0)
+    return height + smoothedPlateau * 100
+  }
+
+  private addCoastalFeatures(_x: number, _y: number, height: number, _featureScale: number): number {
+    // Height-based coastal effects
+    if (height > -5 && height < 5) {
+      height = height * 0.3
+    }
+    return height
   }
 
   public setMode(mode: EditorMode): void {
@@ -1355,9 +1481,9 @@ export class TerrainBuilder {
     }
     
     // Debounce terrain regeneration to avoid excessive updates
-    this.updateTimeout = setTimeout(() => {
+    this.updateTimeout = setTimeout(async () => {
       try {
-        this.generateTerrain()
+        await this.generateTerrain()
       } catch (error) {
         console.error('Error generating terrain:', error)
         // Revert to old config on error
@@ -1370,6 +1496,86 @@ export class TerrainBuilder {
 
   public getConfig(): TerrainConfig {
     return { ...this.config }
+  }
+
+  /**
+   * Set terrain resolution with validation and automatic chunking for high resolutions
+   */
+  public setResolution(resolution: number): void {
+    // Validate resolution - must be power of 2 for optimal performance
+    const validResolutions = [64, 128, 256, 512, 1024, 2048, 4096]
+    const closest = validResolutions.reduce((prev, curr) => 
+      Math.abs(curr - resolution) < Math.abs(prev - resolution) ? curr : prev
+    )
+    
+    if (resolution !== closest) {
+      console.warn(`Resolution ${resolution} adjusted to nearest valid value: ${closest}`)
+    }
+    
+    // Auto-adjust chunk size based on resolution for optimal performance
+    if (closest >= 2048) {
+      this.chunkSize = 32 // Smaller chunks for very high resolutions
+      console.log(`High resolution (${closest}x${closest}) detected - using 32x32 chunks`)
+    } else if (closest >= 1024) {
+      this.chunkSize = 64 // Medium chunks for high resolutions
+      console.log(`High resolution (${closest}x${closest}) detected - using 64x64 chunks`)
+    } else if (closest >= 512) {
+      this.chunkSize = 128 // Larger chunks for moderate resolutions
+    } else {
+      this.chunkSize = 256 // Standard processing for lower resolutions
+    }
+    
+    this.config.resolution = closest
+    console.log(`Resolution set to ${closest}x${closest} with ${this.chunkSize}x${this.chunkSize} chunk processing`)
+  }
+
+  /**
+   * Get supported resolution options
+   */
+  public getSupportedResolutions(): number[] {
+    return [64, 128, 256, 512, 1024, 2048, 4096]
+  }
+
+  /**
+   * Get current chunk size being used for processing
+   */
+  public getChunkSize(): number {
+    return this.chunkSize
+  }
+
+  /**
+   * Test high resolution generation to verify stack overflow fixes
+   */
+  public async testHighResolution(resolution: number = 1024): Promise<boolean> {
+    console.log(`Testing high resolution terrain generation: ${resolution}x${resolution}`)
+    
+    try {
+      // Save current config
+      const originalResolution = this.config.resolution
+      
+      // Set high resolution
+      this.setResolution(resolution)
+      
+      // Generate terrain
+      await this.generateTerrain()
+      
+      // Check if terrain was created successfully
+      const success = this.terrain !== null
+      
+      // Restore original resolution
+      this.setResolution(originalResolution)
+      
+      if (success) {
+        console.log(`✅ High resolution test passed: ${resolution}x${resolution} terrain generated successfully`)
+      } else {
+        console.log(`❌ High resolution test failed: No terrain mesh created`)
+      }
+      
+      return success
+    } catch (error) {
+      console.error(`❌ High resolution test failed with error:`, error)
+      return false
+    }
   }
 
   public getBrushSystem(): BrushSystem {
@@ -1409,7 +1615,7 @@ export class TerrainBuilder {
   public randomizeSeed(): void {
     this.config.seed = Math.floor(Math.random() * 1000000)
     this.advancedTerrainGenerator.setSeed(this.config.seed)
-    this.generateTerrain()
+    this.generateTerrain().catch(console.error)
   }
 
   private animate = (): void => {
@@ -1456,6 +1662,9 @@ export class TerrainBuilder {
     
     // Clean up noise layers GUI - handled by UIController
     
+    // Clean up worker pool
+    this.destroyWorkerPool()
+    
     this.controls.dispose()
   }
 
@@ -1476,23 +1685,106 @@ export class TerrainBuilder {
       return
     }
 
+    // Start erosion progress tracking
+    if (this.uiController && this.uiController.getProgressOverlay) {
+      const progressOverlay = this.uiController.getProgressOverlay()
+      progressOverlay.startTask('erosion', 'Applying Erosion', 'Initializing erosion simulation...')
+    }
+
+    // Optimize erosion config for high resolution terrains
+    const optimizedConfig = this.optimizeErosionConfig(erosionConfig)
+    
     // Update erosion config if provided
-    if (erosionConfig) {
-      this.erosionSystem.updateConfig(erosionConfig)
+    if (optimizedConfig) {
+      this.erosionSystem.updateConfig(optimizedConfig)
     }
 
     // Get current height data from brush system
     const currentHeightData = this.brushSystem.getHeightData()
     
+    if (this.uiController && this.uiController.getProgressOverlay) {
+      const progressOverlay = this.uiController.getProgressOverlay()
+      progressOverlay.updateTask('erosion', 10, `Starting erosion on ${this.config.resolution}x${this.config.resolution} terrain...`)
+    }
+    
+    // Set up progress callback for erosion system
+    this.erosionSystem.setProgressCallback((progress: number, description: string) => {
+      if (this.uiController && this.uiController.getProgressOverlay) {
+        const progressOverlay = this.uiController.getProgressOverlay()
+        progressOverlay.updateTask('erosion', 10 + (progress * 0.8), description) // Map to 10-90%
+      }
+    })
+    
     // Apply erosion
     this.erosionSystem.setHeightData(currentHeightData, this.config.resolution)
     const erodedHeightData = this.erosionSystem.applyErosion()
+    
+    if (this.uiController && this.uiController.getProgressOverlay) {
+      const progressOverlay = this.uiController.getProgressOverlay()
+      progressOverlay.updateTask('erosion', 90, 'Updating terrain geometry...')
+    }
     
     // Update terrain with eroded data
     this.updateTerrainGeometry(erodedHeightData)
     
     // Update brush system with new height data
     this.brushSystem.setTerrain(this.terrain!, erodedHeightData, this.config.resolution)
+    
+    // Complete erosion progress
+    if (this.uiController && this.uiController.getProgressOverlay) {
+      const progressOverlay = this.uiController.getProgressOverlay()
+      progressOverlay.completeTask('erosion')
+    }
+  }
+
+  /**
+   * Optimize erosion config for high resolution terrains - make it more aggressive for satisfying results
+   */
+  private optimizeErosionConfig(userConfig?: Partial<ErosionConfig>): Partial<ErosionConfig> | undefined {
+    if (!userConfig && this.config.resolution < 512) {
+      // No optimization needed for lower resolution
+      return userConfig
+    }
+
+    const optimized: Partial<ErosionConfig> = { ...userConfig }
+    
+    // For high resolution terrains, make erosion more aggressive to get satisfying visual results
+    if (this.config.resolution >= 1024) {
+      // Increase erosion strength for high resolution (more dramatic results)
+      if (!userConfig?.erosionStrength) {
+        optimized.erosionStrength = Math.max(0.5, (userConfig?.erosionStrength || 0.3) * 1.5)
+      }
+      
+      // Increase rain strength for more aggressive erosion
+      if (!userConfig?.rainStrength) {
+        optimized.rainStrength = Math.max(0.03, (userConfig?.rainStrength || 0.02) * 1.2)
+      }
+      
+      // Increase sediment capacity for more carving
+      if (!userConfig?.sedimentCapacity) {
+        optimized.sedimentCapacity = Math.max(6.0, (userConfig?.sedimentCapacity || 4.0) * 1.5)
+      }
+      
+      // Reduce thermal rate slightly to preserve carved features
+      if (!userConfig?.thermalRate) {
+        optimized.thermalRate = Math.max(0.05, (userConfig?.thermalRate || 0.1) * 0.8)
+      }
+      
+      console.log(`⚡ High resolution detected - using aggressive erosion settings for dramatic results`)
+    } else if (this.config.resolution >= 512) {
+      // Medium boost for 512x512
+      if (!userConfig?.erosionStrength) {
+        optimized.erosionStrength = Math.max(0.4, (userConfig?.erosionStrength || 0.3) * 1.3)
+      }
+      
+      if (!userConfig?.rainStrength) {
+        optimized.rainStrength = Math.max(0.025, (userConfig?.rainStrength || 0.02) * 1.1)
+      }
+      
+      console.log(`⚡ Medium resolution detected - using enhanced erosion settings`)
+    }
+
+    return optimized
   }
 
   public getErosionSystem(): ErosionSystem {
@@ -1546,18 +1838,63 @@ export class TerrainBuilder {
     const geometry = this.terrain.geometry as THREE.PlaneGeometry
     const vertices = geometry.attributes.position.array as Float32Array
 
-    // Update vertex heights
-    for (let i = 0; i < heightData.length; i++) {
-      vertices[i * 3 + 2] = heightData[i] // Z coordinate (height)
+    // Update vertex heights using chunked approach for high resolution
+    if (this.config.resolution >= 512) {
+      this.updateVerticesChunkedSync(vertices, heightData)
+    } else {
+      // Direct update for lower resolution
+      for (let i = 0; i < heightData.length; i++) {
+        vertices[i * 3 + 2] = heightData[i] // Z coordinate (height)
+      }
     }
 
     geometry.attributes.position.needsUpdate = true
     geometry.computeVertexNormals()
 
-    // Update height range for terrain material
-    const minHeight = Math.min(...heightData)
-    const maxHeight = Math.max(...heightData)
+    // Update height range for terrain material (avoid spread operator for large arrays)
+    const { minHeight, maxHeight } = this.calculateHeightRangeSafe(heightData)
     this.terrainMaterial.updateHeightRange(minHeight, maxHeight)
+  }
+
+  /**
+   * Update vertices in chunks for high resolution terrains (synchronous version for erosion)
+   */
+  private updateVerticesChunkedSync(vertices: Float32Array, heightData: Float32Array): void {
+    const chunkSize = 8192 // Process 8K vertices at a time
+    
+    for (let start = 0; start < heightData.length; start += chunkSize) {
+      const end = Math.min(start + chunkSize, heightData.length)
+      
+      for (let i = start; i < end; i++) {
+        vertices[i * 3 + 2] = heightData[i] // Z coordinate (height)
+      }
+    }
+  }
+
+  /**
+   * Calculate height range safely without spread operator (prevents stack overflow)
+   */
+  private calculateHeightRangeSafe(heightData: Float32Array): { minHeight: number; maxHeight: number } {
+    if (!heightData || heightData.length === 0) {
+      return { minHeight: 0, maxHeight: 0 }
+    }
+
+    let minHeight = Infinity
+    let maxHeight = -Infinity
+
+    // Process in chunks to avoid blocking on very large arrays
+    const chunkSize = 16384
+    for (let start = 0; start < heightData.length; start += chunkSize) {
+      const end = Math.min(start + chunkSize, heightData.length)
+      
+      for (let i = start; i < end; i++) {
+        const height = heightData[i]
+        if (height < minHeight) minHeight = height
+        if (height > maxHeight) maxHeight = height
+      }
+    }
+
+    return { minHeight, maxHeight }
   }
 
   // Preset erosion configurations
@@ -1567,6 +1904,29 @@ export class TerrainBuilder {
       erosionStrength: 0.1,
       iterations: 50,
       thermalRate: 0.05
+    })
+  }
+
+  public applyStrongErosion(): void {
+    this.applyErosion({
+      rainStrength: 0.04,
+      erosionStrength: 0.6,
+      sedimentCapacity: 8.0,
+      iterations: 80,
+      thermalRate: 0.08,
+      dropletLifetime: 50
+    })
+  }
+
+  public applyDramaticErosion(): void {
+    this.applyErosion({
+      rainStrength: 0.06,
+      erosionStrength: 0.8,
+      sedimentCapacity: 12.0,
+      iterations: 100,
+      thermalRate: 0.06,
+      dropletLifetime: 60,
+      gravity: 6.0
     })
   }
 
@@ -1895,7 +2255,7 @@ export class TerrainBuilder {
   public setTerrainType(type: TerrainType): void {
     this.config.terrainType = type
     if (this.config.advancedMode) {
-      this.generateTerrain()
+      this.generateTerrain().catch(console.error)
     }
   }
 

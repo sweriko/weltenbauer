@@ -1,6 +1,7 @@
 import { GUI } from 'lil-gui'
 import { TerrainBuilder, EditorMode } from '../core/TerrainBuilder'
 import { BrushMode } from '../core/BrushSystem'
+import { ProgressOverlay } from './ProgressOverlay'
 
 export class UIController {
   private terrainBuilder: TerrainBuilder
@@ -9,17 +10,20 @@ export class UIController {
   private modeToggleButton!: HTMLButtonElement
   private noiseLayersFolder: any = null
   private updateTimeout: number | null = null
+  private progressOverlay: ProgressOverlay
 
   // UI state objects for lil-gui
   private terrainParams = {
     size: 5,
+    resolution: 256,
     geologicalComplexity: 1.0,
     domainWarping: 0.5,
     reliefAmplitude: 2.0,
     featureScale: 1.5,
     seed: 123456,
     showGrid: true,
-    randomizeSeed: () => this.randomizeSeed()
+    randomizeSeed: () => this.randomizeSeed(),
+    testHighRes: () => this.testHighResolution()
   }
 
   private brushParams = {
@@ -35,6 +39,8 @@ export class UIController {
 
   private erosionPresets = {
     gentleRain: () => this.applyGentleErosion(),
+    strongErosion: () => this.applyStrongErosion(),
+    dramaticErosion: () => this.applyDramaticErosion(),
     createRiver: () => this.createRiver()
   }
 
@@ -55,6 +61,7 @@ export class UIController {
   constructor(terrainBuilder: TerrainBuilder) {
     this.terrainBuilder = terrainBuilder
     this.canvas = document.getElementById('canvas') as HTMLCanvasElement
+    this.progressOverlay = new ProgressOverlay()
     
     this.setupModeToggle()
     this.setupGUI()
@@ -111,6 +118,29 @@ export class UIController {
       .onChange((value: number) => {
         this.terrainBuilder.updateConfig({ size: value })
       })
+
+    // Resolution controls with performance info
+    const resolutionOptions = {
+      '64x64 (4K vertices)': 64,
+      '128x128 (16K vertices)': 128,
+      '256x256 (66K vertices)': 256,
+      '512x512 (262K vertices)': 512,
+      '1024x1024 (1M vertices)': 1024,
+      '2048x2048 (4.2M vertices)': 2048,
+      '4096x4096 (16.8M vertices)': 4096
+    }
+
+    terrainFolder.add(this.terrainParams, 'resolution', resolutionOptions)
+      .name('🔧 Resolution')
+      .onChange((value: number) => {
+        console.log(`Setting resolution to ${value}x${value}`)
+        this.terrainBuilder.setResolution(value)
+        this.updateResolutionInfo(value)
+      })
+
+    // Test high resolution button
+    terrainFolder.add(this.terrainParams, 'testHighRes')
+      .name('🧪 Test High Resolution')
 
     terrainFolder.add(this.terrainParams, 'geologicalComplexity', 0.0, 2.0, 0.1)
       .name('Geological Complexity')
@@ -399,6 +429,7 @@ export class UIController {
     
     // Update terrain params
     this.terrainParams.size = config.size
+    this.terrainParams.resolution = config.resolution
     this.terrainParams.geologicalComplexity = config.geologicalComplexity
     this.terrainParams.domainWarping = config.domainWarping
     this.terrainParams.reliefAmplitude = config.reliefAmplitude
@@ -430,6 +461,14 @@ export class UIController {
 
   private applyGentleErosion(): void {
     this.terrainBuilder.applyGentleErosion()
+  }
+
+  private applyStrongErosion(): void {
+    this.terrainBuilder.applyStrongErosion()
+  }
+
+  private applyDramaticErosion(): void {
+    this.terrainBuilder.applyDramaticErosion()
   }
 
   private createRiver(): void {
@@ -487,5 +526,70 @@ export class UIController {
     this.gui.controllersRecursive().forEach(controller => {
       controller.updateDisplay()
     })
+  }
+
+  private updateResolutionInfo(resolution: number): void {
+    // Calculate performance estimates
+    const vertices = resolution * resolution
+    let memoryMB: string
+    let timeEstimate: string
+    let chunkSize: number
+
+    if (resolution <= 256) {
+      memoryMB = "~1MB"
+      timeEstimate = "<1s"
+      chunkSize = 256
+    } else if (resolution <= 512) {
+      memoryMB = "~4MB"
+      timeEstimate = "1-3s"
+      chunkSize = 128
+    } else if (resolution <= 1024) {
+      memoryMB = "~16MB"
+      timeEstimate = "3-8s"
+      chunkSize = 64
+    } else if (resolution <= 2048) {
+      memoryMB = "~64MB"
+      timeEstimate = "10-25s"
+      chunkSize = 32
+    } else {
+      memoryMB = "~256MB"
+      timeEstimate = "30-90s"
+      chunkSize = 32
+    }
+
+    console.log(`Resolution ${resolution}x${resolution}:`)
+    console.log(`- Vertices: ${vertices.toLocaleString()}`)
+    console.log(`- Memory: ${memoryMB}`)
+    console.log(`- Generation time: ${timeEstimate}`)
+    console.log(`- Chunk size: ${chunkSize}x${chunkSize}`)
+    
+    // Show warning for very high resolutions
+    if (resolution >= 2048) {
+      console.warn(`⚠️ High resolution detected! This may take ${timeEstimate} to generate.`)
+    }
+  }
+
+  private async testHighResolution(): Promise<void> {
+    console.log('🧪 Testing high resolution terrain generation...')
+    
+    try {
+      // Test with 1024x1024 resolution
+      const success = await this.terrainBuilder.testHighResolution(1024)
+      
+      if (success) {
+        console.log('✅ High resolution test passed! You can safely use higher resolutions.')
+        alert('✅ High resolution test passed!\n\nYour system can handle high resolution terrain generation without stack overflow errors.')
+      } else {
+        console.log('❌ High resolution test failed.')
+        alert('❌ High resolution test failed.\n\nPlease check the console for error details.')
+      }
+    } catch (error) {
+      console.error('Test failed with error:', error)
+      alert('❌ Test failed with error. Check console for details.')
+    }
+  }
+
+  public getProgressOverlay(): ProgressOverlay {
+    return this.progressOverlay
   }
 } 

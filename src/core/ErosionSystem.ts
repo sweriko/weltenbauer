@@ -131,6 +131,7 @@ export class ErosionSystem {
   private resolution: number
   private terrain: TerrainCell[]
   private config: ErosionConfig
+  private progressCallback?: (progress: number, description: string) => void
   
   // Cached gradients for performance
   private gradientX: Float32Array
@@ -242,14 +243,37 @@ export class ErosionSystem {
   public setHeightData(heightData: Float32Array, resolution: number, realWorldSize?: number): void {
     this.heightData = heightData.slice() // Copy to avoid modifying original
     this.resolution = resolution
-    this.terrain = new Array(resolution * resolution)
-    this.gradientX = new Float32Array(resolution * resolution)
-    this.gradientY = new Float32Array(resolution * resolution)
     
-    // Initialize terrain cells
+    const expectedSize = resolution * resolution
+    
+    // Validate input data
+    if (this.heightData.length !== expectedSize) {
+      console.warn(`ErosionSystem: Height data size mismatch. Expected ${expectedSize}, got ${this.heightData.length}`)
+      // Resize heightData to match expected size
+      const resizedData = new Float32Array(expectedSize)
+      const copyLength = Math.min(this.heightData.length, expectedSize)
+      resizedData.set(this.heightData.subarray(0, copyLength))
+      
+      // Fill remaining cells with interpolated values if data is too small
+      if (this.heightData.length < expectedSize && this.heightData.length > 0) {
+        const lastValidHeight = this.heightData[this.heightData.length - 1] || 0
+        for (let i = copyLength; i < expectedSize; i++) {
+          resizedData[i] = lastValidHeight
+        }
+      }
+      
+      this.heightData = resizedData
+      console.log(`ErosionSystem: Resized height data to ${expectedSize} elements`)
+    }
+    
+    this.terrain = new Array(expectedSize)
+    this.gradientX = new Float32Array(expectedSize)
+    this.gradientY = new Float32Array(expectedSize)
+    
+    // Initialize terrain cells with bounds checking
     for (let i = 0; i < this.terrain.length; i++) {
       this.terrain[i] = {
-        height: this.heightData[i],
+        height: this.heightData[i] || 0, // Fallback to 0 if undefined
         water: 0,
         sediment: 0,
         vegetation: this.config.vegetationProtection ? Math.random() * 0.5 : 0,
@@ -301,7 +325,14 @@ export class ErosionSystem {
   }
   
   public applyErosion(): Float32Array {
-    console.log('Starting erosion simulation...')
+    if (this.progressCallback) {
+      this.progressCallback(0, `Starting erosion simulation on ${this.resolution}x${this.resolution} terrain...`)
+    }
+    
+    // Validate terrain state before starting
+    if (!this.terrain || this.terrain.length !== this.resolution * this.resolution) {
+      throw new Error(`ErosionSystem: Invalid terrain state. Expected ${this.resolution * this.resolution} cells, got ${this.terrain?.length || 0}`)
+    }
     
     for (let iter = 0; iter < this.config.iterations; iter++) {
       this.hydraulicErosionStep()
@@ -309,7 +340,11 @@ export class ErosionSystem {
       
       if (iter % 10 === 0) {
         this.calculateGradients()
-        console.log(`Erosion progress: ${Math.round((iter / this.config.iterations) * 100)}%`)
+        const progress = (iter / this.config.iterations) * 100
+        
+        if (this.progressCallback) {
+          this.progressCallback(progress, `Erosion iteration ${iter}/${this.config.iterations} (${Math.round(progress)}%)`)
+        }
       }
     }
     
@@ -318,13 +353,19 @@ export class ErosionSystem {
       this.heightData[i] = this.terrain[i].height
     }
     
-    console.log('Erosion simulation complete')
+    if (this.progressCallback) {
+      this.progressCallback(100, 'Erosion simulation complete')
+    }
+    
     return this.heightData
   }
   
   private hydraulicErosionStep(): void {
     // Spawn multiple droplets per iteration for better coverage
-    const dropletsPerStep = Math.max(1, Math.floor(this.resolution / 4))
+    // For high resolution, use more droplets for stronger erosion effects
+    const baseDroplets = Math.floor(this.resolution / 4)
+    const multiplier = this.resolution >= 1024 ? 1.5 : this.resolution >= 512 ? 1.2 : 1.0
+    const dropletsPerStep = Math.max(1, Math.floor(baseDroplets * multiplier))
     
     for (let d = 0; d < dropletsPerStep; d++) {
       const droplet: Droplet = {
@@ -471,6 +512,10 @@ export class ErosionSystem {
   }
   
   private sampleHeight(x: number, y: number): number {
+    // Clamp coordinates to valid range
+    x = Math.max(0, Math.min(x, this.resolution - 1))
+    y = Math.max(0, Math.min(y, this.resolution - 1))
+    
     const x0 = Math.floor(x)
     const y0 = Math.floor(y)
     const x1 = Math.min(x0 + 1, this.resolution - 1)
@@ -479,10 +524,17 @@ export class ErosionSystem {
     const fx = x - x0
     const fy = y - y0
     
-    const h00 = this.terrain[y0 * this.resolution + x0].height
-    const h10 = this.terrain[y0 * this.resolution + x1].height
-    const h01 = this.terrain[y1 * this.resolution + x0].height
-    const h11 = this.terrain[y1 * this.resolution + x1].height
+    // Get indices with bounds checking
+    const idx00 = y0 * this.resolution + x0
+    const idx10 = y0 * this.resolution + x1
+    const idx01 = y1 * this.resolution + x0
+    const idx11 = y1 * this.resolution + x1
+    
+    // Safe height sampling with fallback
+    const h00 = (this.terrain[idx00]?.height) ?? 0
+    const h10 = (this.terrain[idx10]?.height) ?? 0
+    const h01 = (this.terrain[idx01]?.height) ?? 0
+    const h11 = (this.terrain[idx11]?.height) ?? 0
     
     // Bilinear interpolation
     return h00 * (1 - fx) * (1 - fy) +
@@ -492,6 +544,10 @@ export class ErosionSystem {
   }
   
   private sampleGradient(x: number, y: number): { x: number, y: number } {
+    // Clamp coordinates to valid range
+    x = Math.max(0, Math.min(x, this.resolution - 1))
+    y = Math.max(0, Math.min(y, this.resolution - 1))
+    
     const x0 = Math.floor(x)
     const y0 = Math.floor(y)
     const x1 = Math.min(x0 + 1, this.resolution - 1)
@@ -500,15 +556,22 @@ export class ErosionSystem {
     const fx = x - x0
     const fy = y - y0
     
-    const gx00 = this.gradientX[y0 * this.resolution + x0]
-    const gx10 = this.gradientX[y0 * this.resolution + x1]
-    const gx01 = this.gradientX[y1 * this.resolution + x0]
-    const gx11 = this.gradientX[y1 * this.resolution + x1]
+    // Get indices with bounds checking
+    const idx00 = y0 * this.resolution + x0
+    const idx10 = y0 * this.resolution + x1
+    const idx01 = y1 * this.resolution + x0
+    const idx11 = y1 * this.resolution + x1
     
-    const gy00 = this.gradientY[y0 * this.resolution + x0]
-    const gy10 = this.gradientY[y0 * this.resolution + x1]
-    const gy01 = this.gradientY[y1 * this.resolution + x0]
-    const gy11 = this.gradientY[y1 * this.resolution + x1]
+    // Safe gradient sampling with fallback
+    const gx00 = this.gradientX[idx00] ?? 0
+    const gx10 = this.gradientX[idx10] ?? 0
+    const gx01 = this.gradientX[idx01] ?? 0
+    const gx11 = this.gradientX[idx11] ?? 0
+    
+    const gy00 = this.gradientY[idx00] ?? 0
+    const gy10 = this.gradientY[idx10] ?? 0
+    const gy01 = this.gradientY[idx01] ?? 0
+    const gy11 = this.gradientY[idx11] ?? 0
     
     return {
       x: gx00 * (1 - fx) * (1 - fy) + gx10 * fx * (1 - fy) + gx01 * (1 - fx) * fy + gx11 * fx * fy,
@@ -518,6 +581,10 @@ export class ErosionSystem {
   
   private erodeTerrain(x: number, y: number, amount: number): void {
     if (amount <= 0) return
+    
+    // Clamp coordinates to valid range
+    x = Math.max(0, Math.min(x, this.resolution - 1))
+    y = Math.max(0, Math.min(y, this.resolution - 1))
     
     const x0 = Math.floor(x)
     const y0 = Math.floor(y)
@@ -544,6 +611,8 @@ export class ErosionSystem {
     
     for (let i = 0; i < 4; i++) {
       const cell = this.terrain[indices[i]]
+      if (!cell) continue // Skip if cell doesn't exist
+      
       const erosionAmount = amount * weights[i] * cell.hardness
       
       // Apply vegetation protection
@@ -556,6 +625,10 @@ export class ErosionSystem {
   
   private depositSediment(x: number, y: number, amount: number): void {
     if (amount <= 0) return
+    
+    // Clamp coordinates to valid range
+    x = Math.max(0, Math.min(x, this.resolution - 1))
+    y = Math.max(0, Math.min(y, this.resolution - 1))
     
     const x0 = Math.floor(x)
     const y0 = Math.floor(y)
@@ -581,7 +654,10 @@ export class ErosionSystem {
     ]
     
     for (let i = 0; i < 4; i++) {
-      this.terrain[indices[i]].height += amount * weights[i]
+      const cell = this.terrain[indices[i]]
+      if (!cell) continue // Skip if cell doesn't exist
+      
+      cell.height += amount * weights[i]
     }
   }
   
@@ -591,6 +667,10 @@ export class ErosionSystem {
   
   public getConfig(): ErosionConfig {
     return { ...this.config }
+  }
+
+  public setProgressCallback(callback: (progress: number, description: string) => void): void {
+    this.progressCallback = callback
   }
   
   // Advanced erosion patterns
@@ -678,7 +758,9 @@ export class ErosionSystem {
   }
 
   public applyAdvancedErosion(): Float32Array {
-    console.log('Starting advanced geomorphological simulation...')
+    if (this.progressCallback) {
+      this.progressCallback(0, 'Starting advanced geomorphological simulation...')
+    }
     
     const iterations = Math.floor(this.advancedConfig.advanced.totalTime / this.advancedConfig.advanced.timeStep)
     
@@ -722,12 +804,18 @@ export class ErosionSystem {
       this.state.timeEvolved += this.advancedConfig.advanced.timeStep
       
       if (iter % 10 === 0) {
-        const progress = Math.round((iter / iterations) * 100)
-        console.log(`Geomorphological evolution: ${progress}% (${this.state.timeEvolved} years)`)
+        const progress = (iter / iterations) * 100
+        
+        if (this.progressCallback) {
+          this.progressCallback(progress, `Geomorphological evolution: ${Math.round(progress)}% (${this.state.timeEvolved} years)`)
+        }
       }
     }
     
-    console.log(`Simulation complete: ${this.state.timeEvolved} years of evolution`)
+    if (this.progressCallback) {
+      this.progressCallback(100, `Simulation complete: ${this.state.timeEvolved} years of evolution`)
+    }
+    
     return this.state.elevation
   }
   

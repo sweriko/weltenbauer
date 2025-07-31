@@ -208,9 +208,9 @@ export class AdvancedTerrainGenerator {
       for (let x = 0; x < resolution; x++) {
         const index = y * resolution + x
         
-        // Improved coordinate transformation - no center artifacts
-        const nx = (x / (resolution - 1)) * 2 - 1
-        const ny = (y / (resolution - 1)) * 2 - 1
+        // Improved coordinate transformation with slight offset to avoid center artifacts
+        const nx = (x / (resolution - 1)) * 2 - 1 + 0.001
+        const ny = (y / (resolution - 1)) * 2 - 1 + 0.001
         
         // Advanced domain warping controlled by domainWarping parameter
         const warpStrength = domainWarping * 0.6 // 0.0 to 0.36
@@ -501,12 +501,25 @@ export class AdvancedTerrainGenerator {
       turbulence: true
     })
     
-    // Ocean depth falloff
-    const distance = Math.sqrt(x * x + y * y)
-    const oceanDepth = Math.max(0, (distance - 0.8) * 300)
+    // Replace circular ocean depth with noise-based sea level variation
+    const seaLevel = this.noiseSystem.fbm(x * 0.3, y * 0.3, {
+      octaves: 3,
+      frequency: 0.2 / featureScale,
+      amplitude: 80,
+      persistence: 0.4,
+      lacunarity: 2.0,
+      seed: this.config.seed + 700,
+      offset: { x: 1000, y: 1000 },
+      warpStrength: 0.1,
+      warpFrequency: 0.1,
+      turbulence: false
+    })
     
-    // Combine layers using demo technique
-    let height = volcanic * islandMask + coastal * 0.3 - oceanDepth
+    // Add subtle noise-based depth variation instead of circular falloff
+    const depthVariation = this.noiseSystem.perlin(x * 0.1, y * 0.1) * 40
+    
+    // Combine layers using demo technique without circular artifacts
+    let height = volcanic * islandMask + coastal * 0.3 + seaLevel + depthVariation
     
     return height
   }
@@ -566,11 +579,29 @@ export class AdvancedTerrainGenerator {
   }
 
   private addCoastalFeatures(_x: number, _y: number, height: number, _featureScale: number): number {
-    // Removed distance-based coastal features to eliminate rings
-    // Instead use height-based coastal effects
-    if (height > -5 && height < 5) {
-      // Beach/shoreline area - make it flatter
-      height = height * 0.3
+    // Use only height-based coastal effects to avoid circular artifacts
+    // No distance calculations from center point
+    if (height > -10 && height < 10) {
+      // Beach/shoreline area - make it flatter and add coastal detail
+      const coastalVariation = this.noiseSystem.perlin(_x * 3.0, _y * 3.0) * 2.0
+      height = height * 0.4 + coastalVariation
+    }
+    
+    // Add subtle coastal erosion patterns for areas near sea level
+    if (height > -20 && height < 20) {
+      const erosionPattern = this.noiseSystem.fbm(_x, _y, {
+        octaves: 3,
+        frequency: 2.0,
+        amplitude: 3.0,
+        persistence: 0.5,
+        lacunarity: 2.0,
+        seed: this.config.seed + 900,
+        offset: { x: 4000, y: 4000 },
+        warpStrength: 0.1,
+        warpFrequency: 1.0,
+        turbulence: false
+      } as FBMConfig)
+      height += erosionPattern * 0.3
     }
     
     return height
@@ -622,11 +653,24 @@ export class AdvancedTerrainGenerator {
         const voronoi = this.noiseSystem.voronoiNoise(x, y, 0.4)
         const islandMask = Math.max(0, 0.6 - voronoi) / 0.6
         
-        // Apply ocean depth falloff
-        const distance = Math.sqrt(x * x + y * y)
-        const oceanDepth = Math.max(0, (distance - 0.8) * 300)
+        // Replace circular ocean depth with noise-based sea level
+        const seaLevelNoise = this.noiseSystem.fbm(x * 0.15, y * 0.15, {
+          octaves: 4,
+          frequency: 0.3,
+          amplitude: 120,
+          persistence: 0.5,
+          lacunarity: 2.0,
+          seed: this.config.seed + 800,
+          offset: { x: 500, y: 500 },
+          warpStrength: 0.2,
+          warpFrequency: 0.1,
+          turbulence: false
+        } as FBMConfig)
         
-        return height * islandMask + layerValue * layer.weight * islandMask - oceanDepth
+        // Add organic depth variation
+        const depthNoise = this.noiseSystem.perlin(x * 0.05 + 2000, y * 0.05 + 3000) * 60
+        
+        return height * islandMask + layerValue * layer.weight * islandMask + seaLevelNoise + depthNoise
       default:
         return height + layerValue * layer.weight
     }

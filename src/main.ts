@@ -29,8 +29,8 @@ class App {
 
     // Initial terrain generation
     this.terrainBuilder.generateTerrain()
-    
-    console.log('Weltbuilder initialized')
+      .then(() => console.log('Weltbuilder initialized with terrain'))
+      .catch(error => console.error('Failed to initialize terrain:', error))
   }
 }
 
